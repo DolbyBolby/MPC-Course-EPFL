@@ -2,57 +2,64 @@ import numpy as np
 import cvxpy as cp
 from mpt4py import Polyhedron
 from control import dlqr
+import matplotlib.pyplot as plt
 
 from .MPCControl_base import MPCControl_base
 
 
-class MPCControl_xvel(MPCControl_base):
-    x_ids: np.ndarray = np.array([1, 4, 6])
-    u_ids: np.ndarray = np.array([1])
+class MPCControl_zvel(MPCControl_base):
+    x_ids: np.ndarray = np.array([8])
+    u_ids: np.ndarray = np.array([2])
 
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
 
-        ### ATTENTION !!! je pense qu'il faut compute le maximum_inv_set offline et juste donner H dans le deliverable 
-
-        Q = 4*np.eye(self.nx)# for tuning
-        R = 1*np.eye(self.nu)
+        
+        Q = 50*np.eye(self.nx)# for tuning
+        R = 0.1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
+        K = -K
 
-        A_cl = self.A + self.B@K
+        A_cl = self.A + self.B @ K
 
         #constraints
-        Hx = np.array([[0., 1., 0.],
-               [0.,-1., 0.]])
-        kx = np.array([0.1745, 0.1745])
 
         Hu = np.array([[ 1.],
                     [-1.]])
-        ku = np.array([0.26, 0.26])
+       
+        U = Polyhedron.from_Hrep(Hu, np.array([80.0 - self.us[0], self.us[0] - 40.0]))
+       
 
-        X = Polyhedron.from_Hrep(Hx, kx)
-        U = Polyhedron.from_Hrep(Hu, ku) 
         # maximum inavariant set for recusive feasability
 
-        KU = Polyhedron.from_Hrep(U.A @ (-K), U.b)
-        O = X.intersect(KU)
-
-        itr = 1
-        max_iter = 30
+        KU = Polyhedron.from_Hrep(U.A @ K, U.b)
+        O = KU
         
-        while iter < max_iter:     
+        max_iter = 30
+        for iter in range(max_iter): 
             Oprev = O
             F,f = O.A,O.b
             O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
+            
             if O == Oprev:
                 break
-            itr += 1
-    
-       # Define variables
         
+
+        #plot max invariance set
+       
+        # Create a figure
+        #fig = plt.figure()
+        #ax = fig.add_subplot(111, projection='3d')
+        #O.plot(ax=ax)
+        #plt.show()
+
+       # Define variables
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
+
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
@@ -60,24 +67,21 @@ class MPCControl_xvel(MPCControl_base):
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form(x_var[:,i], Q)
-            cost += cp.quad_form(u_var[:,i], R)
+            cost += cp.quad_form((x_var[:,i]-self.xs), Q)
+            cost += cp.quad_form((u_var[:,i]-self.us), R)
 
         # Terminal cost
-        cost += cp.quad_form(x_var[:, -1], Qf)
+        cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
                 
         constraints = []
 
-        # Initial condition
-        constraints.append(x_var[:, 0] == x0_var)
+        constraints.append((x_var[:, 0]-xs_col) == x0_var)
         # System dynamics
-        constraints.append(x_var[:,1:] == self.A @ x_var[:,:-1] + self.B @ u_var)
-        # State constraints
-        constraints.append(X.A @ x_var[:, :-1] <= X.b.reshape(-1, 1))
+        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
         # Input constraints
-        constraints.append(U.A @ u_var <= U.b.reshape(-1, 1))
+        constraints.append(U.A @ (u_var-us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
-        constraints.append(O.A @ x_var[:, -1] <= O.b.reshape(-1, 1))
+        constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
         
 
         # all contraints
@@ -95,7 +99,6 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
@@ -103,7 +106,6 @@ class MPCControl_xvel(MPCControl_base):
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value
         u_traj = self.u_var.value
-    
         # YOUR CODE HERE
         #################################################
 
