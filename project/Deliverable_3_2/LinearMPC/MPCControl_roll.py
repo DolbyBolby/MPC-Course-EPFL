@@ -7,17 +7,17 @@ import matplotlib.pyplot as plt
 from .MPCControl_base import MPCControl_base
 
 
-class MPCControl_zvel(MPCControl_base):
-    x_ids: np.ndarray = np.array([8])
-    u_ids: np.ndarray = np.array([2])
+class MPCControl_roll(MPCControl_base):
+    x_ids: np.ndarray = np.array([2, 5])
+    u_ids: np.ndarray = np.array([3])
 
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
 
-        
-        Q = 50*np.eye(self.nx)# for tuning
-        R = 0.1*np.eye(self.nu)
+
+        Q = 1*np.eye(self.nx)# for tuning
+        R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
@@ -30,7 +30,7 @@ class MPCControl_zvel(MPCControl_base):
         Hu = np.array([[ 1.],
                     [-1.]])
        
-        U = Polyhedron.from_Hrep(Hu, np.array([80.0 - self.us[0], self.us[0] - 40.0]))
+        U = Polyhedron.from_Hrep(Hu, np.array([20.0 - self.us[0],  20.0 + self.us[0]]))
        
 
         # maximum inavariant set for recusive feasability
@@ -75,7 +75,7 @@ class MPCControl_zvel(MPCControl_base):
                 
         constraints = []
 
-        constraints.append((x_var[:, 0]) == x0_var)
+        constraints.append((x_var[:, 0]-xs_col) == x0_var)
         # System dynamics
         constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
         # Input constraints

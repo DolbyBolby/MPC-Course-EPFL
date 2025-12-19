@@ -424,7 +424,7 @@ class Rocket(RocketBase):
 
         # Closed-loop simulation
         for k in range(N_cl):
-            print(f"Simulating time {t_cl[k]:.2f}", end=': ')
+            #print(f"Simulating time {t_cl[k]:.2f}", end=': ')
             if pos_control is not None:
                 x_target[6:9, k] = pos_control.get_u(x_cl[9:12, k])
             u_cl[:, k], x_ol[..., k], u_ol[..., k], t_ol[..., k] = mpc.get_u(t_cl[k], x_cl[:, k], x_target=x_target[:, k], u_target=u_target)

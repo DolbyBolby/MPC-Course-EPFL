@@ -16,8 +16,11 @@ class MPCControl_xvel(MPCControl_base):
         # YOUR CODE HERE
 
 
-        Q = 100*np.eye(self.nx)# for tuning
-        R = 0.01*np.eye(self.nu)
+        Q = np.diag([5.0, 200.0, 50.0])# for tuning
+        R = 1*np.eye(self.nu)
+
+        print("Q diag:", np.diag(Q), "R:", R)
+
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
@@ -83,7 +86,6 @@ class MPCControl_xvel(MPCControl_base):
                 
         constraints = []
 
-        x0_var = 
         # Initial condition
         constraints.append(x_var[:, 0] == x0_var)
         # System dynamics
@@ -115,10 +117,15 @@ class MPCControl_xvel(MPCControl_base):
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
+        print("status",self.ocp.status)
 
         u0 = self.u_var.value[:, 0]
+        print("u0", u0, "du0", u0-self.us)
+        
         x_traj = self.x_var.value
+        print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
+        print("u_traj", u_traj[0,:])
     
         # YOUR CODE HERE
         #################################################
