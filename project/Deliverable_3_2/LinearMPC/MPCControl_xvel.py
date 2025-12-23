@@ -11,6 +11,40 @@ class MPCControl_xvel(MPCControl_base):
     x_ids: np.ndarray = np.array([1, 4, 6])
     u_ids: np.ndarray = np.array([1])
 
+    def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray] : 
+        """
+        Compute the steady-state state xs and input us that minimize us^2,
+        subject to the system steady-state equations and input constraints.
+        """
+        r = np.array(r).reshape((-1,))
+        C = np.array([[0, 0, 1]])
+
+        xss_var = cp.Variable(self.nx, name='xs')
+        uss_var = cp.Variable(self.nu, name='us')
+
+        du_min = -0.26
+        du_max =  0.26
+
+        # Objective: minimize input squared
+        ss_obj = cp.quad_form(uss_var, np.eye(self.nu))
+        
+        # Constraints: steady-state and input bounds
+        ss_cons = [
+            uss_var >= du_min,
+            uss_var <= du_max,
+            xss_var == self.A @ xss_var + self.B @ uss_var,
+            C @ xss_var == r - C @ self.xs,
+        ]
+
+        prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
+        prob.solve()
+        assert prob.status == cp.OPTIMAL
+
+        xss = xss_var.value
+        uss = uss_var.value
+
+        return xss, uss
+
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
@@ -18,8 +52,6 @@ class MPCControl_xvel(MPCControl_base):
 
         Q = np.diag([5.0, 200.0, 50.0])# for tuning
         R = 1*np.eye(self.nu)
-
-        print("Q diag:", np.diag(Q), "R:", R)
 
 
         # Terminal weight Qf and terminal controller K
@@ -74,15 +106,17 @@ class MPCControl_xvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+        x_ref = cp.Parameter((self.nx,))
+        u_ref = cp.Parameter((self.nu,))
 
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-self.xs), Q)
-            cost += cp.quad_form((u_var[:,i]-self.us), R)
+            cost += cp.quad_form((x_var[:,i]-x_ref), Q)
+            cost += cp.quad_form((u_var[:,i]-u_ref), R)
 
         # Terminal cost
-        cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
+        cost += cp.quad_form((x_var[:, -1]-x_ref), Qf)
                 
         constraints = []
 
@@ -104,6 +138,8 @@ class MPCControl_xvel(MPCControl_base):
         self.x0_var = x0_var     # garde une référence pour get_u
         self.x_var = x_var
         self.u_var = u_var
+        self.x_ref = x_ref
+        self.u_ref = u_ref
 
         # YOUR CODE HERE
         #################################################
@@ -113,51 +149,28 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
+
+        x_ref = x_target
+        xss,uss = self.compute_steady_state(x_ref)
         
         self.x0_var.value = x0
+        self.x_ref.value = xss
+        self.u_ref.value = uss
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
-        print("status",self.ocp.status)
+        #print("status",self.ocp.status)
 
         u0 = self.u_var.value[:, 0]
-        print("u0", u0, "du0", u0-self.us)
+        #print("u0", u0, "du0", u0-self.us)
         
         x_traj = self.x_var.value
-        print("vx_traj", x_traj[2,:])
+        #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
-        print("u_traj", u_traj[0,:])
+        #print("u_traj", u_traj[0,:])
     
         # YOUR CODE HERE
         #################################################
 
         return u0, x_traj, u_traj
     
-    def compute_steady_state(self,U:Polyhedron,r:np.ndarray)-> tuple[np.ndarray,np.ndarray] : 
-        """
-        Compute the steady-state state xs and input us that minimize us^2,
-        subject to the system steady-state equations and input constraints.
-        """
-        r = np.array(r).reshape((-1,))
-        C = np.array([[0, 0, 1]])
-
-        xs_var = cp.Variable(self.nx, name='xs')
-        us_var = cp.Variable(self.nu, name='us')
-
-        # Objective: minimize input squared
-        ss_obj = cp.quad_form(us_var, np.eye(self.nu))
-        
-        # Constraints: steady-state and input bounds
-        ss_cons = [
-            us_var >= -U.b[0],
-            print("u_min",-U.b[0]),
-            us_var <= U.b[1],
-            print("u_max",U.b[1]),
-            xs_var == self.A @ xs_var + self.B @ us_var,
-            r == C @ xs_var,
-        ]
-
-        prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
-        prob.solve()
-        assert prob.status == cp.OPTIMAL
-
-        return xs_var.value, us_var.value
+    

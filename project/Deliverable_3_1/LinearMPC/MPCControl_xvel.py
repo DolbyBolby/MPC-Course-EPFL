@@ -16,11 +16,8 @@ class MPCControl_xvel(MPCControl_base):
         # YOUR CODE HERE
 
 
-        Q = np.diag([5.0, 200.0, 50.0])# for tuning
+        Q = 10*np.eye(self.nx)# for tuning
         R = 1*np.eye(self.nu)
-
-        print("Q diag:", np.diag(Q), "R:", R)
-
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
@@ -39,32 +36,68 @@ class MPCControl_xvel(MPCControl_base):
 
         X = Polyhedron.from_Hrep(Hx, kx - (Hx @ self.xs))
         U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))  
-       
+    
 
         # maximum inavariant set for recusive feasability
 
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
         O = X.intersect(KU)
-        
-
-       
+        converged = False
         max_iter = 30
-        for iter in range(max_iter): 
+        itr = 1
+        while itr < max_iter: 
             Oprev = O
             F,f = O.A,O.b
             O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
             
             if O == Oprev:
+                converged = True
                 break
-        
+
+        if converged:
+            print('Maximum invariant set successfully computed after {0} iterations.'.format(itr))
 
         #plot max invariance set
        
         # Create a figure
-        #fig = plt.figure()
-        #ax = fig.add_subplot(111, projection='3d')
-        #O.plot(ax=ax)
-        #plt.show()
+        # fig, ax = plt.subplots()
+        # O.projection(dims=(0,1)).plot(ax)
+        # O.projection(dims=(1,2)).plot(ax)
+        # plt.show()
+
+        #----------
+
+        # Try to plot, but don't fail if rays are present
+        try:
+            fig, axs = plt.subplots(1, 3, figsize=(15, 4))
+            
+            # Projection sur (x0, x1)
+            O.projection(dims=(0, 1)).plot(ax=axs[0])
+            axs[0].set_title("Projection (0,1)")
+            axs[0].set_xlabel("x0")
+            axs[0].set_ylabel("x1")
+            axs[0].axis("equal")
+            
+            # Projection sur (x1, x2)
+            O.projection(dims=(1, 2)).plot(ax=axs[1])
+            axs[1].set_title("Projection (1,2)")
+            axs[1].set_xlabel("x1")
+            axs[1].set_ylabel("x2")
+            axs[1].axis("equal")
+            
+            # Projection sur (x0, x2)
+            O.projection(dims=(0, 2)).plot(ax=axs[2])
+            axs[2].set_title("Projection (0,2)")
+            axs[2].set_xlabel("x0")
+            axs[2].set_ylabel("x2")
+            axs[2].axis("equal")
+            
+            plt.tight_layout()
+            plt.show()
+        except NotImplementedError as e:
+            print(f"Cannot plot polyhedron: {e}")
+            print("The invariant set O may have unbounded directions (rays)")
+
 
        # Define variables
         
@@ -117,15 +150,15 @@ class MPCControl_xvel(MPCControl_base):
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
-        print("status",self.ocp.status)
+        #print("status",self.ocp.status)
 
         u0 = self.u_var.value[:, 0]
-        print("u0", u0, "du0", u0-self.us)
+       # print("u0", u0, "du0", u0-self.us)
         
         x_traj = self.x_var.value
-        print("vx_traj", x_traj[2,:])
+        #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
-        print("u_traj", u_traj[0,:])
+       # print("u_traj", u_traj[0,:])
     
         # YOUR CODE HERE
         #################################################

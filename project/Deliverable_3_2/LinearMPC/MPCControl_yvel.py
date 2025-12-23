@@ -11,6 +11,40 @@ class MPCControl_yvel(MPCControl_base):
     x_ids: np.ndarray = np.array([0, 3, 7])
     u_ids: np.ndarray = np.array([0])
 
+    def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray] : 
+        """
+        Compute the steady-state state xs and input us that minimize us^2,
+        subject to the system steady-state equations and input constraints.
+        """
+        r = np.array(r).reshape((-1,))
+        C = np.array([[0, 0, 1]])
+
+        dxss_var = cp.Variable(self.nx, name='xs')
+        duss_var = cp.Variable(self.nu, name='us')
+
+        du_min = -0.26
+        du_max =  0.26
+
+        # Objective: minimize input squared
+        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
+        
+        # Constraints: steady-state and input bounds
+        ss_cons = [
+            duss_var >= du_min,
+            duss_var <= du_max,
+            dxss_var == self.A @ dxss_var + self.B @ duss_var,
+            C @ dxss_var == r - C @ self.xs,
+        ]
+
+        prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
+        prob.solve()
+        assert prob.status == cp.OPTIMAL
+
+        xss = self.xs + dxss_var.value
+        uss = self.us + duss_var.value
+
+        return xss, uss
+
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
@@ -71,15 +105,17 @@ class MPCControl_yvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+        x_ref = cp.Parameter((self.nx,))
+        u_ref = cp.Parameter((self.nu,))
 
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-self.xs), Q)
-            cost += cp.quad_form((u_var[:,i]-self.us), R)
+            cost += cp.quad_form((x_var[:,i]-x_ref), Q)
+            cost += cp.quad_form((u_var[:,i]-u_ref), R)
 
         # Terminal cost
-        cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
+        cost += cp.quad_form((x_var[:, -1]-x_ref), Qf)
                 
         constraints = []
 
@@ -101,6 +137,8 @@ class MPCControl_yvel(MPCControl_base):
         self.x0_var = x0_var     # garde une référence pour get_u
         self.x_var = x_var
         self.u_var = u_var
+        self.x_ref = x_ref
+        self.u_ref = u_ref
 
         # YOUR CODE HERE
         #################################################
@@ -111,7 +149,12 @@ class MPCControl_yvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
+        x_ref = x_target
+        xss,uss = self.compute_steady_state(x_ref)
+        
         self.x0_var.value = x0
+        self.x_ref.value = xss
+        self.u_ref.value = uss
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
 
