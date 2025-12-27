@@ -101,7 +101,11 @@ class MPCControl_roll(MPCControl_base):
         # YOUR CODE HERE
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
+        #assert self.ocp.status == cp.OPTIMAL
+        print("SS status:", self.ocp.status, "r:", x_target)
+        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            print("Infeasible steady-state for r =", x_target)
+            return None, None
 
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value

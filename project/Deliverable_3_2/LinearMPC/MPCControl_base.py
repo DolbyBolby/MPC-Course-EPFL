@@ -9,7 +9,7 @@ class MPCControl_base:
     """Complete states indices"""
 
     x_ids: np.ndarray
-    u_ids: np.ndarray
+    u_ids: np.ndarray   
 
     """Optimization system"""
     A: np.ndarray

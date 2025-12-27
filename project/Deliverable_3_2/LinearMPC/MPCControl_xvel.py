@@ -11,39 +11,44 @@ class MPCControl_xvel(MPCControl_base):
     x_ids: np.ndarray = np.array([1, 4, 6])
     u_ids: np.ndarray = np.array([1])
 
-    def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray] : 
+    def compute_steady_state(self,r:np.ndarray)-> None: 
         """
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
         r = np.array(r).reshape((-1,))
+        v_ref = r[-1]
         C = np.array([[0, 0, 1]])
 
-        xss_var = cp.Variable(self.nx, name='xs')
-        uss_var = cp.Variable(self.nu, name='us')
+        dxss_var = cp.Variable(self.nx, name='xs')
+        duss_var = cp.Variable(self.nu, name='us')
 
-        du_min = -0.26
-        du_max =  0.26
+        xs_col = self.xs.reshape(-1, 1)   # (nu,1)
+
+        u_min = -0.26 - self.us
+        u_max =  0.26 - self.us
 
         # Objective: minimize input squared
-        ss_obj = cp.quad_form(uss_var, np.eye(self.nu))
+        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
         
         # Constraints: steady-state and input bounds
         ss_cons = [
-            uss_var >= du_min,
-            uss_var <= du_max,
-            xss_var == self.A @ xss_var + self.B @ uss_var,
-            C @ xss_var == r - C @ self.xs,
+            duss_var >= u_min,
+            duss_var <= u_max,
+            dxss_var == self.A @ dxss_var + self.B @ duss_var,
+            C @ dxss_var == v_ref - C@xs_col,
         ]
 
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve()
         assert prob.status == cp.OPTIMAL
+        # print("SS status:", prob.status, "duss:", duss_var.value )
+        # if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+        #     print("Infeasible steady-state for duss =",duss_var.value)
 
-        xss = xss_var.value
-        uss = uss_var.value
-
-        return xss, uss
+        self.xs = dxss_var.value + self.xs
+        self.us = duss_var.value + self.us
+        
 
     def _setup_controller(self) -> None:
         #################################################
@@ -59,6 +64,8 @@ class MPCControl_xvel(MPCControl_base):
         K = -K
 
         A_cl = self.A + self.B @ K
+
+        
 
         #constraints
         Hx = np.array([[0., 1., 0.],
@@ -91,7 +98,7 @@ class MPCControl_xvel(MPCControl_base):
         
 
         #plot max invariance set
-       
+
         # Create a figure
         #fig = plt.figure()
         #ax = fig.add_subplot(111, projection='3d')
@@ -106,40 +113,36 @@ class MPCControl_xvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
-        x_ref = cp.Parameter((self.nx,))
-        u_ref = cp.Parameter((self.nu,))
+        # self.xs = cp.Parameter((self.nx,))
+        # self.us = cp.parameter((self.nu,))
 
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-x_ref), Q)
-            cost += cp.quad_form((u_var[:,i]-u_ref), R)
+            cost += cp.quad_form((x_var[:,i] - self.xs), Q)
+            cost += cp.quad_form((u_var[:,i] - self.us), R)
 
         # Terminal cost
-        cost += cp.quad_form((x_var[:, -1]-x_ref), Qf)
-                
+        cost += cp.quad_form((x_var[:, -1] - self.xs), Qf)
+
         constraints = []
 
         # Initial condition
         constraints.append(x_var[:, 0] == x0_var)
         # System dynamics
-        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
+        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var - us_col))
         # State constraints
-        constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1))
+        constraints.append(X.A @ (x_var[:, :-1] - xs_col) <= X.b.reshape(-1, 1))
         # Input constraints
-        constraints.append(U.A @ (u_var-us_col) <= U.b.reshape(-1, 1))
+        constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
-        constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
-        
+        constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
 
-        # all contraints
-
+        # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
-        self.x0_var = x0_var     # garde une référence pour get_u
+        self.x0_var = x0_var
         self.x_var = x_var
         self.u_var = u_var
-        self.x_ref = x_ref
-        self.u_ref = u_ref
 
         # YOUR CODE HERE
         #################################################
@@ -150,14 +153,14 @@ class MPCControl_xvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-        x_ref = x_target
-        xss,uss = self.compute_steady_state(x_ref)
-        
+        self.compute_steady_state(x_target)
         self.x0_var.value = x0
-        self.x_ref.value = xss
-        self.u_ref.value = uss
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
+        # print("SS status:", self.ocp.status, "r:", x_target)
+        # if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+        #     print("Infeasible steady-state for r =", x_target)
+        #     return None, None
         #print("status",self.ocp.status)
 
         u0 = self.u_var.value[:, 0]
