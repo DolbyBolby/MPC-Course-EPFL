@@ -11,7 +11,7 @@ class MPCControl_zvel(MPCControl_base):
     x_ids: np.ndarray = np.array([8])
     u_ids: np.ndarray = np.array([2])
 
-    def compute_steady_state(self,r:np.ndarray)-> None : 
+    def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray] : 
         """
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
@@ -47,8 +47,10 @@ class MPCControl_zvel(MPCControl_base):
         #     return None, None
         
 
-        self.xs = dxss_var.value + self.xs
-        self.us = duss_var.value + self.us
+        xss = dxss_var.value + self.xs
+        uss = duss_var.value + self.us
+
+        return xss,uss
 
     def _setup_controller(self) -> None:
         #################################################
@@ -102,17 +104,17 @@ class MPCControl_zvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
-        # x_ref = cp.Parameter((self.nx,))
-        # u_ref = cp.Parameter((self.nu,))
+        x_ref = cp.Parameter((self.nx,))
+        u_ref = cp.Parameter((self.nu,))
 
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-self.xs), Q)
-            cost += cp.quad_form((u_var[:,i]-self.us), R)
+            cost += cp.quad_form((x_var[:,i]-cp.reshape(x_ref, (self.nx,))), Q)
+            cost += cp.quad_form((u_var[:,i]-cp.reshape(u_ref, (self.nu,))), R)
 
         # Terminal cost
-        cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
+        cost += cp.quad_form((x_var[:, -1]-cp.reshape(x_ref, (self.nx,))), Qf)
                 
         constraints = []
 
@@ -131,8 +133,8 @@ class MPCControl_zvel(MPCControl_base):
         self.x0_var = x0_var     # garde une référence pour get_u
         self.x_var = x_var
         self.u_var = u_var
-        # self.x_ref = x_ref
-        # self.u_ref = u_ref
+        self.x_ref = x_ref
+        self.u_ref = u_ref
 
         # YOUR CODE HERE
         #################################################
@@ -143,11 +145,11 @@ class MPCControl_zvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
         
-        self.compute_steady_state(x_target)
+        xss,uss = self.compute_steady_state(x_target)
         
         self.x0_var.value = x0
-        # self.x_ref.value = xss
-        # self.u_ref.value = uss
+        self.x_ref.value = xss
+        self.u_ref.value = uss
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
         # print("SS status:", self.ocp.status, "r:", x_target)
