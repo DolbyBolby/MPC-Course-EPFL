@@ -11,42 +11,6 @@ class MPCControl_roll(MPCControl_base):
     x_ids: np.ndarray = np.array([2, 5])
     u_ids: np.ndarray = np.array([3])
 
-    def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray]: 
-        """
-        Compute the steady-state state xs and input us that minimize us^2,
-        subject to the system steady-state equations and input constraints.
-        """
-        r = np.array(r).reshape((-1,))
-        v_ref = r[-1]
-        C = np.array([[0,1]])
-
-        dxss_var = cp.Variable(self.nx, name='xs')
-        duss_var = cp.Variable(self.nu, name='us')
-
-        xs_col = self.xs.reshape(-1, 1)   # (nu,1)
-
-
-        # Objective: minimize input squared
-        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
-        
-        # Constraints: steady-state and input bounds
-        ss_cons = [
-            dxss_var == self.A @ dxss_var + self.B @ duss_var,
-            C @ dxss_var == v_ref - C@xs_col,
-        ]
-
-        prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
-        prob.solve()
-        assert prob.status == cp.OPTIMAL
-        # print("SS status:", prob.status, "duss:", duss_var.value )
-        # if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-        #     print("Infeasible steady-state for duss =",duss_var.value)
-
-        xss = dxss_var.value + self.xs
-        uss = duss_var.value + self.us
-        
-        return xss,uss
-
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
@@ -56,10 +20,10 @@ class MPCControl_roll(MPCControl_base):
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
-        # K,Qf,_ = dlqr(self.A,self.B,Q,R)
-        # K = -K
+        K,Qf,_ = dlqr(self.A,self.B,Q,R)
+        K = -K
 
-        # A_cl = self.A + self.B @ K
+        A_cl = self.A + self.B @ K
 
         #constraints
 
@@ -71,17 +35,17 @@ class MPCControl_roll(MPCControl_base):
 
         # maximum inavariant set for recusive feasability
 
-        # KU = Polyhedron.from_Hrep(U.A @ K, U.b)
-        # O = KU
+        KU = Polyhedron.from_Hrep(U.A @ K, U.b)
+        O = KU
         
-        # max_iter = 30
-        # for iter in range(max_iter): 
-        #     Oprev = O
-        #     F,f = O.A,O.b
-        #     O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
+        max_iter = 30
+        for iter in range(max_iter): 
+            Oprev = O
+            F,f = O.A,O.b
+            O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
             
-        #     if O == Oprev:
-        #         break
+            if O == Oprev:
+                break
         
 
         #plot max invariance set
@@ -100,19 +64,14 @@ class MPCControl_roll(MPCControl_base):
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
 
-        x_ref = cp.Parameter((self.nx,))
-        u_ref = cp.Parameter((self.nu,))
-        x_ref.value = self.xs
-        u_ref.value = self.us
-
         # Costs
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-cp.reshape(x_ref, (self.nx,))), Q)
-            cost += cp.quad_form((u_var[:,i]-cp.reshape(u_ref, (self.nu,))), R)
+            cost += cp.quad_form((x_var[:,i]-self.xs), Q)
+            cost += cp.quad_form((u_var[:,i]-self.us), R)
 
         # Terminal cost
-        #cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
+        cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
                 
         constraints = []
 
@@ -122,7 +81,7 @@ class MPCControl_roll(MPCControl_base):
         # Input constraints
         constraints.append(U.A @ (u_var-us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
-        #constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
+        constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
         
 
         # all contraints
@@ -131,8 +90,6 @@ class MPCControl_roll(MPCControl_base):
         self.x0_var = x0_var     # garde une référence pour get_u
         self.x_var = x_var
         self.u_var = u_var
-        self.x_ref = x_ref
-        self.u_ref = u_ref
 
         # YOUR CODE HERE
         #################################################
@@ -142,16 +99,13 @@ class MPCControl_roll(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        xss,uss = self.compute_steady_state(x_target)
-        self.x_ref.value = xss
-        self.u_ref.value = uss 
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
-        # print("SS status:", self.ocp.status, "r:", x_target)
-        # if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-        #     print("Infeasible steady-state for r =", x_target)
-        #     return None, None
+        #assert self.ocp.status == cp.OPTIMAL
+        print("SS status:", self.ocp.status, "r:", x_target)
+        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            print("Infeasible steady-state for r =", x_target)
+            return None, None
 
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value

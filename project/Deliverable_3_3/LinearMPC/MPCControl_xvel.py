@@ -144,7 +144,7 @@ class MPCControl_xvel(MPCControl_base):
         # Input constraints
         constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
-        # constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
+        #constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
