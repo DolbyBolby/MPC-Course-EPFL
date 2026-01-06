@@ -162,7 +162,7 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        print("x_var befor = ", self.x_var.value)
+
         xss,uss = self.compute_steady_state(x_target)
         self.x_ref.value = xss
         self.u_ref.value = uss
@@ -177,7 +177,7 @@ class MPCControl_xvel(MPCControl_base):
 
         u0 = self.u_var.value[:, 0]
         #print("u0", u0, "du0", u0-self.us)
-        print("x_var after = ", self.x_var.value[0][0])
+        
         x_traj = self.x_var.value
         #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value

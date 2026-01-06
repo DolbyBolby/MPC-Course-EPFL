@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 from .MPCControl_base import MPCControl_base
 
 
-class MPCControl_xvel(MPCControl_base):
-    x_ids: np.ndarray = np.array([1, 4, 6])
-    u_ids: np.ndarray = np.array([1])
+class MPCControl_yvel(MPCControl_base):
+    x_ids: np.ndarray = np.array([0, 3, 7])
+    u_ids: np.ndarray = np.array([0])
 
     def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray]: 
         """
@@ -51,6 +51,8 @@ class MPCControl_xvel(MPCControl_base):
         
         return xss,uss
 
+
+
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
@@ -58,6 +60,7 @@ class MPCControl_xvel(MPCControl_base):
 
         Q = np.diag([1.0, 2000.0, 20.0])# for tuning
         R = 1*np.eye(self.nu)
+        S = 0.1*np.eye(1)
 
 
         # Terminal weight Qf and terminal controller K
@@ -66,10 +69,6 @@ class MPCControl_xvel(MPCControl_base):
 
         A_cl = self.A + self.B @ K
 
-        # x_ref = cp.Parameter((self.nx,))
-        # u_ref = cp.Parameter((self.nu,))
-        # x_ref.value = self.xs
-        # u_ref.value = self.us
         x_ref = cp.Parameter((self.nx,))
         u_ref = cp.Parameter((self.nu,))
         x_ref.value = self.xs
@@ -106,14 +105,6 @@ class MPCControl_xvel(MPCControl_base):
                 break
         
 
-        #plot max invariance set
-
-        # Create a figure
-        #fig = plt.figure()
-        #ax = fig.add_subplot(111, projection='3d')
-        #O.plot(ax=ax)
-        #plt.show()
-
        # Define variables
         
         xs_col = self.xs.reshape(-1, 1)   # (nx,1)
@@ -122,6 +113,7 @@ class MPCControl_xvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+        e_var = cp.Variable((1,self.N+1))
         
 
         # Costs
@@ -129,6 +121,7 @@ class MPCControl_xvel(MPCControl_base):
         for i in range(self.N):
             cost += cp.quad_form((x_var[:,i] - cp.reshape(x_ref, (self.nx,))), Q)
             cost += cp.quad_form((u_var[:,i] - cp.reshape(u_ref, (self.nu,))), R)
+            cost += cp.quad_form((e_var[:,i]),S)        
 
         # Terminal cost
         cost += cp.quad_form((x_var[:, -1] - cp.reshape(x_ref, (self.nx,))), Qf)
@@ -140,11 +133,13 @@ class MPCControl_xvel(MPCControl_base):
         # System dynamics
         constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var - us_col))
         # State constraints
-        constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1))
+        constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1) + e_var[:,:-1])
         # Input constraints
         constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
         constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
+        # Slack variable constraints
+        constraints.append(e_var[:,1:] >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -153,6 +148,7 @@ class MPCControl_xvel(MPCControl_base):
         self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
+        self.e_var = e_var
 
         # YOUR CODE HERE
         #################################################
@@ -162,30 +158,24 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        print("x_var befor = ", self.x_var.value)
+
         xss,uss = self.compute_steady_state(x_target)
+        
+        self.x0_var.value = x0
         self.x_ref.value = xss
         self.u_ref.value = uss
-        self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
+        # assert self.ocp.status == cp.OPTIMAL
         # print("SS status:", self.ocp.status, "r:", x_target)
         # if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
         #     print("Infeasible steady-state for r =", x_target)
         #     return None, None
-        #print("status",self.ocp.status)
 
         u0 = self.u_var.value[:, 0]
-        #print("u0", u0, "du0", u0-self.us)
-        print("x_var after = ", self.x_var.value[0][0])
         x_traj = self.x_var.value
-        #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
-        #print("u_traj", u_traj[0,:])
     
         # YOUR CODE HERE
         #################################################
 
         return u0, x_traj, u_traj
-    
-    

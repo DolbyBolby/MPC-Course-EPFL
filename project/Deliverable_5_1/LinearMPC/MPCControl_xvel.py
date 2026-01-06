@@ -55,26 +55,22 @@ class MPCControl_xvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-
+       # Define variables
         Q = np.diag([1.0, 2000.0, 20.0])# for tuning
         R = 1*np.eye(self.nu)
+        S = 0.1*np.eye(1)
 
-
-        # Terminal weight Qf and terminal controller K
-        K,Qf,_ = dlqr(self.A,self.B,Q,R)
-        K = -K
-
-        A_cl = self.A + self.B @ K
-
-        # x_ref = cp.Parameter((self.nx,))
-        # u_ref = cp.Parameter((self.nu,))
-        # x_ref.value = self.xs
-        # u_ref.value = self.us
+        x_var = cp.Variable((self.nx, self.N + 1))
+        u_var = cp.Variable((self.nu, self.N))
+        x0_var = cp.Parameter((self.nx,))
         x_ref = cp.Parameter((self.nx,))
         u_ref = cp.Parameter((self.nu,))
         x_ref.value = self.xs
         u_ref.value = self.us
+        e_var = cp.Variable((1,self.N+1))
 
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
 
         #constraints
         Hx = np.array([[0., 1., 0.],
@@ -87,41 +83,6 @@ class MPCControl_xvel(MPCControl_base):
 
         X = Polyhedron.from_Hrep(Hx, kx - (Hx @ self.xs))
         U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))  
-       
-
-        # maximum inavariant set for recusive feasability
-
-        KU = Polyhedron.from_Hrep(U.A @ K, U.b)
-        O = X.intersect(KU)
-        
-
-       
-        max_iter = 30
-        for iter in range(max_iter): 
-            Oprev = O
-            F,f = O.A,O.b
-            O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
-            
-            if O == Oprev:
-                break
-        
-
-        #plot max invariance set
-
-        # Create a figure
-        #fig = plt.figure()
-        #ax = fig.add_subplot(111, projection='3d')
-        #O.plot(ax=ax)
-        #plt.show()
-
-       # Define variables
-        
-        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
-        us_col = self.us.reshape(-1, 1)   # (nu,1)
-
-        x_var = cp.Variable((self.nx, self.N + 1))
-        u_var = cp.Variable((self.nu, self.N))
-        x0_var = cp.Parameter((self.nx,))
         
 
         # Costs
@@ -129,9 +90,7 @@ class MPCControl_xvel(MPCControl_base):
         for i in range(self.N):
             cost += cp.quad_form((x_var[:,i] - cp.reshape(x_ref, (self.nx,))), Q)
             cost += cp.quad_form((u_var[:,i] - cp.reshape(u_ref, (self.nu,))), R)
-
-        # Terminal cost
-        cost += cp.quad_form((x_var[:, -1] - cp.reshape(x_ref, (self.nx,))), Qf)
+            cost += cp.quad_form((e_var[:,i]),S)
 
         constraints = []
 
@@ -140,11 +99,11 @@ class MPCControl_xvel(MPCControl_base):
         # System dynamics
         constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var - us_col))
         # State constraints
-        constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1))
+        constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1) + e_var[:,:-1])
         # Input constraints
         constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
-        # Terminal Constraints
-        constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
+        # Slack variable constraints
+        constraints.append(e_var[:,1:] >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -153,6 +112,7 @@ class MPCControl_xvel(MPCControl_base):
         self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
+        self.e_var = e_var
 
         # YOUR CODE HERE
         #################################################
@@ -162,7 +122,7 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        print("x_var befor = ", self.x_var.value)
+
         xss,uss = self.compute_steady_state(x_target)
         self.x_ref.value = xss
         self.u_ref.value = uss
@@ -177,7 +137,7 @@ class MPCControl_xvel(MPCControl_base):
 
         u0 = self.u_var.value[:, 0]
         #print("u0", u0, "du0", u0-self.us)
-        print("x_var after = ", self.x_var.value[0][0])
+        
         x_traj = self.x_var.value
         #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
