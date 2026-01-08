@@ -16,40 +16,76 @@ class MPCControl_xvel(MPCControl_base):
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
-        r = np.array(r).reshape((-1,))
-        v_ref = r[-1]
-        C = np.array([[0, 0, 1]])
-
-        dxss_var = cp.Variable(self.nx, name='xs')
-        duss_var = cp.Variable(self.nu, name='us')
-
-        xs_col = self.xs.reshape(-1, 1)   # (nu,1)
-
-        u_min = -0.26 - self.us
-        u_max =  0.26 - self.us
-
-        # Objective: minimize input squared
-        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
+        return self.compute_steady_state_with_disturbance(r, np.zeros(self.nx))
+    
+    def compute_steady_state_with_disturbance(self, r: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute steady-state with disturbance compensation.
+        At steady state: xss = A*xss + B*uss + d
+        => (I - A)*xss = B*uss + d
         
-        # Constraints: steady-state and input bounds
+        We solve for absolute values xss and uss that satisfy:
+        - The steady-state equation with disturbance
+        - The output constraint C*xss = r (target velocity)
+        - Input bounds
+        """
+        r = np.array(r).reshape((-1,))
+        v_ref = r[-1]  # Target velocity (last element of state is velocity)
+        C = np.array([[0, 0, 1]])  # Output matrix (selects velocity)
+
+        xss_var = cp.Variable(self.nx, name='xss')
+        uss_var = cp.Variable(self.nu, name='uss')
+
+        # Absolute input bounds
+        u_min = -0.26
+        u_max =  0.26
+
+        # Objective: minimize input effort
+        ss_obj = cp.quad_form(uss_var - self.us, np.eye(self.nu))
+        
+        # Constraints: steady-state WITH disturbance
+        # (I - A)*xss = B*uss + d
+        I_minus_A = np.eye(self.nx) - self.A
         ss_cons = [
-            duss_var >= u_min,
-            duss_var <= u_max,
-            dxss_var == self.A @ dxss_var + self.B @ duss_var,
-            C @ dxss_var == v_ref - C@xs_col,
+            uss_var >= u_min,
+            uss_var <= u_max,
+            I_minus_A @ xss_var == self.B @ uss_var + d.reshape(-1),
+            C @ xss_var == v_ref,
         ]
 
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve()
-        assert prob.status == cp.OPTIMAL
-        # print("SS status:", prob.status, "duss:", duss_var.value )
-        # if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-        #     print("Infeasible steady-state for duss =",duss_var.value)
-
-        xss = dxss_var.value + self.xs
-        uss = duss_var.value + self.us
         
-        return xss,uss
+        if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            print(f"Warning: X-vel steady-state infeasible. Status: {prob.status}, ||d||={np.linalg.norm(d):.3f}")
+            # Fallback: try without disturbance
+            ss_cons_fallback = [
+                uss_var >= u_min,
+                uss_var <= u_max,
+                I_minus_A @ xss_var == self.B @ uss_var,
+                C @ xss_var == v_ref,
+            ]
+            prob_fallback = cp.Problem(cp.Minimize(ss_obj), ss_cons_fallback)
+            prob_fallback.solve()
+            
+            if prob_fallback.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] and xss_var.value is not None:
+                xss = xss_var.value
+                uss = uss_var.value
+            else:
+                # Last resort: use nominal
+                print(f"Warning: X-vel fallback also failed, using nominal xs/us")
+                xss = self.xs.copy()
+                uss = self.us.copy()
+        else:
+            if xss_var.value is not None and uss_var.value is not None:
+                xss = xss_var.value
+                uss = uss_var.value
+            else:
+                print(f"Warning: X-vel steady-state solver returned None, using nominal")
+                xss = self.xs.copy()
+                uss = self.us.copy()
+        
+        return xss, uss
 
     def _setup_controller(self) -> None:
         #################################################
@@ -58,7 +94,7 @@ class MPCControl_xvel(MPCControl_base):
        # Define variables
         Q = np.diag([1.0, 2000.0, 20.0])# for tuning
         R = 1*np.eye(self.nu)
-        S = 0.1*np.eye(1)
+        S = 0.001*np.eye(1)  # Poids slack très faible pour permettre les violations temporaires
 
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
@@ -96,14 +132,18 @@ class MPCControl_xvel(MPCControl_base):
 
         # Initial condition
         constraints.append(x_var[:, 0] == x0_var)
-        # System dynamics
-        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var - us_col))
-        # State constraints
+        # System dynamics in ABSOLUTE coordinates (nominal model without d)
+        # x[k+1] = A*x[k] + B*u[k]
+        # The disturbance compensation is implicit through the reference (xss, uss)
+        constraints.append(
+            x_var[:,1:] == self.A @ x_var[:,:-1] + self.B @ u_var
+        )
+        # State constraints (in deviation from nominal xs for constraint formulation)
         constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1) + e_var[:,:-1])
-        # Input constraints
+        # Input constraints (applied in deviation coordinates)
         constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
         # Slack variable constraints
-        constraints.append(e_var[:,1:] >= 0)
+        constraints.append(e_var >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -114,38 +154,124 @@ class MPCControl_xvel(MPCControl_base):
         self.u_ref = u_ref
         self.e_var = e_var
 
-        # YOUR CODE HERE
-        #################################################
-
     def get_u(
         self, x0: np.ndarray, x_target: np.ndarray = None, u_target: np.ndarray = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        #################################################
-        # YOUR CODE HERE
-
-        xss,uss = self.compute_steady_state(x_target)
+        """
+        Compute control input with offset-free observer.
+        """
+        # Initialize observer on first call
+        if not hasattr(self, 'd_hat'):
+            self.d_hat = np.zeros(self.nx)
+            self.x_prev = x0.copy()
+            self.u_prev = np.zeros(self.nu)
+        else:
+            # Estimate disturbance using prediction error
+            x_pred = self.A @ self.x_prev + self.B @ self.u_prev
+            prediction_error = x0 - x_pred
+            # Update disturbance estimate with integral action (gain réduit)
+            gain_d = 0.05  # Disturbance estimation gain (réduit pour stabilité)
+            self.d_hat = self.d_hat + gain_d * prediction_error
+            # Saturer l'estimation pour éviter l'infaisabilité
+            d_max = 0.5  # Limite de perturbation
+            self.d_hat = np.clip(self.d_hat, -d_max, d_max)
+        
+        # Compute steady state ACCOUNTING for disturbance
+        xss, uss = self.compute_steady_state_with_disturbance(x_target, self.d_hat)
+        
+        # Solve MPC with disturbance model
+        self.x0_var.value = x0
         self.x_ref.value = xss
         self.u_ref.value = uss
-        self.x0_var.value = x0
-        self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
-        # print("SS status:", self.ocp.status, "r:", x_target)
-        # if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-        #     print("Infeasible steady-state for r =", x_target)
-        #     return None, None
-        #print("status",self.ocp.status)
+        self.ocp.solve(solver=cp.PIQP, warm_start=True)
+        
+        # Fallback if solver fails
+        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            print(f"Warning: MPCControl_xvel solver status = {self.ocp.status}")
+            # Try with nominal steady-state (no disturbance)
+            self.x_ref.value = self.xs
+            self.u_ref.value = self.us
+            self.ocp.solve(solver=cp.PIQP, warm_start=True)
+            if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                # Last resort: use previous solution or zero input
+                print(f"Warning: MPCControl_xvel both solvers failed - using fallback control")
+                if hasattr(self, 'u_prev') and self.u_prev is not None:
+                    u0 = self.u_prev.copy()
+                else:
+                    u0 = self.us.copy()
+                x_traj = np.tile(x0.reshape(-1, 1), (1, self.N+1))
+                u_traj = np.tile(u0.reshape(-1, 1), (1, self.N))
+                self.x_prev = x0.copy()
+                self.u_prev = u0.copy()
+                return u0, x_traj, u_traj
 
         u0 = self.u_var.value[:, 0]
-        #print("u0", u0, "du0", u0-self.us)
-        
         x_traj = self.x_var.value
-        #print("vx_traj", x_traj[2,:])
         u_traj = self.u_var.value
-        #print("u_traj", u_traj[0,:])
-    
-        # YOUR CODE HERE
-        #################################################
+        
+        # Store for next iteration
+        self.x_prev = x0.copy()
+        self.u_prev = u0.copy()
 
         return u0, x_traj, u_traj
     
+    def estimate_parameters(self, x_k: np.ndarray, x_km1: np.ndarray, u_km1: np.ndarray) -> None:
+        """
+        Update estimated state and disturbance using Luenberger observer.
+        x_k: current measurement
+        x_km1: previous measurement
+        u_km1: previous input
+        """
+        C = np.array([[0, 0, 1]])
+        Cd = np.array([[0.0]])  # disturbance not directly measured
+        
+        # Augmented state z = [x; d]
+        z_hat_k = np.concatenate([self.x_hat, self.d_hat])
+        
+        # Measurement
+        y_k = C @ x_k
+        y_pred_k = C @ self.x_hat + Cd @ self.d_hat
+        
+        # Augmented system matrices
+        nd = 1
+        A_hat = np.vstack((
+            np.hstack((self.A, np.zeros((self.nx, nd)))),
+            np.hstack((np.zeros((nd, self.nx)), np.eye(nd)))
+        ))
+        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
+        
+        # Observer update
+        z_hat_next = A_hat @ z_hat_k + B_hat @ u_km1 + self.L @ (y_k - y_pred_k)
+        
+        self.x_hat = z_hat_next[:self.nx]
+        self.d_hat = z_hat_next[self.nx:]
     
+    def compute_observer_gain(self):
+        C = np.array([[0, 0, 1]])
+        ny = C.shape[0]
+        nd = 1
+
+        Bd = np.array([[0], [0], [0]])
+        Cd = np.array([[1]])
+
+        # A_hat = [A  Bd;  0  I]
+        A_hat = np.vstack((
+            np.hstack((self.A, Bd)),
+            np.hstack((np.zeros((ny, self.nx)), np.eye(ny)))
+        ))
+
+        # B_hat = [B; 0]
+        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
+
+        # C_hat = [C  Cd]
+        C_hat = np.hstack((C, np.ones((ny,nd))))
+
+        # Use direct gain specification for robustness
+        # L has size (nx+nd, ny) = (4, 1)
+        L = np.array([
+            [0.05],   # x velocity correction
+            [0.05],   # x acceleration correction  
+            [0.05],   # x jerk correction
+            [0.2]     # disturbance correction
+        ])
+        return L
