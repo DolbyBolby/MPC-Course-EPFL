@@ -1,8 +1,7 @@
 import numpy as np
 import cvxpy as cp
 from mpt4py import Polyhedron
-from control import dlqr
-import matplotlib.pyplot as plt
+from scipy.signal import place_poles
 
 from .MPCControl_base import MPCControl_base
 
@@ -84,9 +83,9 @@ class MPCControl_zvel(MPCControl_base):
         constraints.append(U.A @ (u_var - u_ref_col) <= U.b.reshape(-1, 1) - U.A @ u_ref_col)
 
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
-        self.x0_var = x0_var     # garde une référence pour get_u
-        self.x_var = x_var
-        self.u_var = u_var
+        self.x0_var = x0_var
+        self.dx_var = dx_var
+        self.du_var = du_var
         self.x_ref = x_ref
         self.u_ref = u_ref
         self.x_hat = x0_var

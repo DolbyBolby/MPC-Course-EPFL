@@ -26,9 +26,10 @@ class MPCControl_yvel(MPCControl_base):
         u_max = 0.26
 
         # Objective: minimize input squared
-        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
+        ss_obj = cp.quad_form(uss_var - self.us, np.eye(self.nu))
         
-        # Constraints: steady-state and input bounds
+        # Constraints: steady-state WITH disturbance and input bounds
+        I_minus_A = np.eye(self.nx) - self.A
         ss_cons = [
             duss_var >= u_min - self.us,
             duss_var <= u_max - self.us,
@@ -115,7 +116,7 @@ class MPCControl_yvel(MPCControl_base):
         # Terminal Constraints
         constraints.append(O.A @ (x_var[:, -1] - x_ref_col) <= O.b.reshape(-1, 1))
         # Slack variable constraints
-        constraints.append(e_var[:,1:] >= 0)
+        constraints.append(e_var >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -124,10 +125,6 @@ class MPCControl_yvel(MPCControl_base):
         self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
-        self.e_var = e_var
-
-        # YOUR CODE HERE
-        #################################################
 
     def get_u(
         self, x0: np.ndarray, x_target: np.ndarray = None, u_target: np.ndarray = None
@@ -144,9 +141,10 @@ class MPCControl_yvel(MPCControl_base):
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value
         u_traj = self.u_var.value
-    
-        # YOUR CODE HERE
-        #################################################
+        
+        # Store for next iteration
+        self.x_prev = x0.copy()
+        self.u_prev = u0.copy()
 
         return u0, x_traj, u_traj
     
