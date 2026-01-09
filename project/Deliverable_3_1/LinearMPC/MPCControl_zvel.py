@@ -99,7 +99,7 @@ class MPCControl_zvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        self.x0_var.value = x0[self.x_ids]
+        self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
 
