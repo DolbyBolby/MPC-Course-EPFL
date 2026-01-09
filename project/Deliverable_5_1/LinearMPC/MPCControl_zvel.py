@@ -15,16 +15,18 @@ class MPCControl_zvel(MPCControl_base):
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
+        print("in ss")
         target = r[-1]
+        print("a")
         dxss_var = cp.Variable(self.nx, name='xss')
         duss_var = cp.Variable(self.nu, name='uss')
-
+        print("b")
         u_min = 40
         u_max = 80
 
         # Objective: minimize input squared
         ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
-        
+        print("self.B")
         # Constraints: steady-state and input bounds
         ss_cons = [
             duss_var >= u_min - self.us,
@@ -32,13 +34,13 @@ class MPCControl_zvel(MPCControl_base):
             dxss_var == self.A @ dxss_var + self.B @ duss_var + self.B @ d_hat,
             self.C @ dxss_var == target - self.C @ self.xs.reshape(-1,1) - self.Cd @ d_hat,
         ]
-
+        print("b")
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve(solver=cp.PIQP)
         assert prob.status == cp.OPTIMAL
         xss = dxss_var.value + self.xs
         uss = duss_var.value + self.us
-        
+        print("end steady state")
         return xss,uss
 
     def _setup_controller(self) -> None:
@@ -54,14 +56,13 @@ class MPCControl_zvel(MPCControl_base):
         u_ref.value = self.us
         x_ref_col = x_ref.value.reshape(-1, 1)   # (nx,1)
         u_ref_col = u_ref.value.reshape(-1, 1)   # (nu,1)
-        x_hat = cp.Parameter(self.nx, name='x0_hat')     # (estimated) initial state x0
-        d_hat = cp.Parameter(1, 'd_hat') 
+
+        #x_hat = cp.Parameter(self.nx, name='x0_hat')     # (estimated) initial state x0
+        #d_hat = cp.Parameter(1, 'd_hat') 
         
         
         Q = 50*np.eye(self.nx)# for tuning
         R = 0.1*np.eye(self.nu)
-
-        self.L = self.compute_observer_gain()
 
         #constraints
         Hu = np.array([[ 1.],
@@ -76,7 +77,7 @@ class MPCControl_zvel(MPCControl_base):
             cost += cp.quad_form((u_var[:,i]-u_ref), R)
                 
         constraints = []
-        constraints.append((x_var[:, 0]) == x_hat - x_ref_col)
+        constraints.append((x_var[:, 0]) == x0_var - x_ref_col)
         # System dynamics
         constraints.append((x_var[:,1:] - x_ref_col) == self.A @ (x_var[:,:-1] - x_ref_col) + self.B @ (u_var - u_ref_col))
         # Input constraints
@@ -84,12 +85,12 @@ class MPCControl_zvel(MPCControl_base):
 
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
         self.x0_var = x0_var
-        self.dx_var = dx_var
-        self.du_var = du_var
+        self.x_var = x_var
+        self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
-        self.x_hat = x0_var
-        print("x_hat setup",self.x_hat.value)
+        #self.x_hat = x0_var
+        #print("x_hat setup",self.x_hat.value)
 
         # YOUR CODE HERE
         #################################################
@@ -99,11 +100,21 @@ class MPCControl_zvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        self.x0_var.value = x0
-        x_hat,d_hat = self.compute_estimates(x0)
-        xss,uss = self.compute_steady_state(x_target,d_hat)
-        self.x_hat.value = x_hat
-        print("x_hat getu",self.x_hat.value)
+
+        if not hasattr(self, 'd_hat'):
+            print("1")
+            self.d_hat = np.zeros(self.nx)
+            self.x_hat = x0
+            self.L = self.compute_observer_gain()
+            xss,uss = self.compute_steady_state(x_target,self.d_hat)
+            print("2")
+        else :
+            print("3")
+            self.compute_estimates(x0)
+            xss,uss = self.compute_steady_state(x_target,self.d_hat)
+
+        self.x0_var.value = self.x_hat
+        print("x_hat getu",self.x_hat)
         self.x_ref.value = xss
         self.u_ref.value = uss
         self.ocp.solve(solver=cp.PIQP)
@@ -127,33 +138,34 @@ class MPCControl_zvel(MPCControl_base):
         print("after")
         self.x_hat = tmp[:self.nx]
         self.d_hat = tmp[self.nx:]
+        print("end")
     
     def compute_observer_gain(self)-> tuple[np.ndarray]:
 
         self.C = np.array([[1]])
         self.Cd = np.array([[1]])
 
-        print("Cd",self.Cd)
-        print("A",self.A)
-        print("B",self.B)
+        # print("Cd",self.Cd)
+        # print("A",self.A)
+        # print("B",self.B)
 
         # A_hat = [A  Bd;  0  I]
         self.A_hat = np.vstack((
             np.hstack((self.A, self.B)),
             np.hstack((0, 1))
         ))
-        print("A_hat",self.A_hat)
+        #print("A_hat",self.A_hat)
         # B_hat = [B; 0]
         self.B_hat = np.vstack((self.B, np.zeros((1, self.nu))))
-        print("B_hat",self.B_hat)
+        #print("B_hat",self.B_hat)
         # C_hat = [C  Cd]
         self.C_hat = np.hstack((self.C, self.Cd))
-        print("C_hat",self.C_hat)
+        #print("C_hat",self.C_hat)
 
         poles = np.array([0.5, 0.6])
         from scipy.signal import place_poles
         res = place_poles(self.A_hat.T, self.C_hat.T, poles)
         L = -res.gain_matrix.T
-        print("A_hat",L)
+        print("L",L)
 
         return L

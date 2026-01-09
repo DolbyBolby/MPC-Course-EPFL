@@ -120,115 +120,22 @@ class MPCControl_roll(MPCControl_base):
     def get_u(
         self, x0: np.ndarray, x_target: np.ndarray = None, u_target: np.ndarray = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Compute control input with offset-free observer.
-        """
-        # Initialize observer on first call
-        if not hasattr(self, 'd_hat'):
-            self.d_hat = np.zeros(self.nx)
-            self.x_prev = x0.copy()
-            self.u_prev = np.zeros(self.nu)
-        else:
-            # Estimate disturbance using prediction error
-            x_pred = self.A @ self.x_prev + self.B @ self.u_prev
-            prediction_error = x0 - x_pred
-            # Update disturbance estimate with integral action
-            gain_d = 0.05  # Disturbance estimation gain (réduit pour stabilité)
-            self.d_hat = self.d_hat + gain_d * prediction_error
-            # Saturer l'estimation pour éviter l'infaisabilité
-            d_max = 0.3
-            self.d_hat = np.clip(self.d_hat, -d_max, d_max)
-        
-        # Solve MPC with disturbance model
+        #################################################
+        # YOUR CODE HERE
+        xss,uss = self.compute_steady_state(x_target)
+        self.x_ref.value = xss
+        self.u_ref.value = uss
         self.x0_var.value = x0
-        self.ocp.solve(solver=cp.PIQP, warm_start=True)
-        
-        # Fallback if solver fails
-        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Warning: MPCControl_roll solver status = {self.ocp.status}")
-            # Try again
-            self.ocp.solve(solver=cp.PIQP, warm_start=False)
-            if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                # Last resort: use previous solution or zero input
-                print(f"Warning: MPCControl_roll both solvers failed - using fallback control")
-                if hasattr(self, 'u_prev') and self.u_prev is not None:
-                    u0 = self.u_prev.copy()
-                else:
-                    u0 = self.us.copy()
-                x_traj = np.tile(x0.reshape(-1, 1), (1, self.N+1))
-                u_traj = np.tile(u0.reshape(-1, 1), (1, self.N))
-                self.x_prev = x0.copy()
-                self.u_prev = u0.copy()
-                return u0, x_traj, u_traj
+        self.ocp.solve(solver=cp.PIQP)
+        assert self.ocp.status == cp.OPTIMAL
 
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value
         u_traj = self.u_var.value
-        
-        # Store for next iteration
-        self.x_prev = x0.copy()
-        self.u_prev = u0.copy()
+    
+        # YOUR CODE HERE
+        #################################################
 
         return u0, x_traj, u_traj
     
-    def estimate_parameters(self, x_k: np.ndarray, x_km1: np.ndarray, u_km1: np.ndarray) -> None:
-        """
-        Update estimated state and disturbance using Luenberger observer.
-        x_k: current measurement
-        x_km1: previous measurement
-        u_km1: previous input
-        """
-        C = np.array([[1.0, 0]])
-        Cd = np.array([[0.0]])  # disturbance not directly measured
-        
-        # Augmented state z = [x; d]
-        z_hat_k = np.concatenate([self.x_hat, self.d_hat])
-        
-        # Measurement
-        y_k = C @ x_k
-        y_pred_k = C @ self.x_hat + Cd @ self.d_hat
-        
-        # Augmented system matrices
-        nd = 1
-        A_hat = np.vstack((
-            np.hstack((self.A, np.zeros((self.nx, nd)))),
-            np.hstack((np.zeros((nd, self.nx)), np.eye(nd)))
-        ))
-        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
-        
-        # Observer update
-        z_hat_next = A_hat @ z_hat_k + B_hat @ u_km1 + self.L @ (y_k - y_pred_k)
-        
-        self.x_hat = z_hat_next[:self.nx]
-        self.d_hat = z_hat_next[self.nx:]
     
-    def compute_observer_gain(self):
-        C = np.array([[1.0, 0]])
-        ny = C.shape[0]
-        nd = 1
-
-        Bd = np.array([[0], [0]])
-        Cd = np.array([[1]])
-
-        # A_hat = [A  Bd;  0  I]
-        A_hat = np.vstack((
-            np.hstack((self.A, Bd)),
-            np.hstack((np.zeros((ny, self.nx)), np.eye(ny)))
-        ))
-
-        # B_hat = [B; 0]
-        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
-
-        # C_hat = [C  Cd]
-        C_hat = np.hstack((C, np.ones((ny,nd))))
-
-        # Use direct gain specification for robustness (avoids pole placement issues)
-        # L = [l_roll; l_pitch; l_d] where:
-        #   - l_roll, l_pitch: state estimation gains (small)
-        #   - l_d: disturbance estimation gain (moderate)
-        L = np.array([
-            [0.05],   # roll angle correction
-            [0.05],   # roll rate correction
-            [0.2]     # disturbance correction
-        ])
-        return L

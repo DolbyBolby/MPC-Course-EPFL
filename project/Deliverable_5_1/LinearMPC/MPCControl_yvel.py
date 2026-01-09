@@ -26,10 +26,8 @@ class MPCControl_yvel(MPCControl_base):
         u_max = 0.26
 
         # Objective: minimize input squared
-        ss_obj = cp.quad_form(uss_var - self.us, np.eye(self.nu))
+        ss_obj = cp.quad_form(duss_var - self.us, np.eye(self.nu))
         
-        # Constraints: steady-state WITH disturbance and input bounds
-        I_minus_A = np.eye(self.nx) - self.A
         ss_cons = [
             duss_var >= u_min - self.us,
             duss_var <= u_max - self.us,
@@ -141,10 +139,6 @@ class MPCControl_yvel(MPCControl_base):
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value
         u_traj = self.u_var.value
-        
-        # Store for next iteration
-        self.x_prev = x0.copy()
-        self.u_prev = u0.copy()
 
         return u0, x_traj, u_traj
     

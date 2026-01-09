@@ -16,19 +16,6 @@ class MPCControl_xvel(MPCControl_base):
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
-        return self.compute_steady_state_with_disturbance(r, np.zeros(self.nx))
-    
-    def compute_steady_state_with_disturbance(self, r: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Compute steady-state with disturbance compensation.
-        At steady state: xss = A*xss + B*uss + d
-        => (I - A)*xss = B*uss + d
-        
-        We solve for absolute values xss and uss that satisfy:
-        - The steady-state equation with disturbance
-        - The output constraint C*xss = r (target velocity)
-        - Input bounds
-        """
         target = r[-1]
         C = np.array([[0, 0, 1]])
 
@@ -38,12 +25,10 @@ class MPCControl_xvel(MPCControl_base):
         u_min = -0.26
         u_max = 0.26
 
-        # Objective: minimize input effort
-        ss_obj = cp.quad_form(uss_var - self.us, np.eye(self.nu))
+        # Objective: minimize input squared
+        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
         
-        # Constraints: steady-state WITH disturbance
-        # (I - A)*xss = B*uss + d
-        I_minus_A = np.eye(self.nx) - self.A
+        # Constraints: steady-state and input bounds
         ss_cons = [
             duss_var >= u_min - self.us,
             duss_var <= u_max - self.us,
@@ -162,63 +147,4 @@ class MPCControl_xvel(MPCControl_base):
 
         return u0, x_traj, u_traj
     
-    def estimate_parameters(self, x_k: np.ndarray, x_km1: np.ndarray, u_km1: np.ndarray) -> None:
-        """
-        Update estimated state and disturbance using Luenberger observer.
-        x_k: current measurement
-        x_km1: previous measurement
-        u_km1: previous input
-        """
-        C = np.array([[0, 0, 1]])
-        Cd = np.array([[0.0]])  # disturbance not directly measured
-        
-        # Augmented state z = [x; d]
-        z_hat_k = np.concatenate([self.x_hat, self.d_hat])
-        
-        # Measurement
-        y_k = C @ x_k
-        y_pred_k = C @ self.x_hat + Cd @ self.d_hat
-        
-        # Augmented system matrices
-        nd = 1
-        A_hat = np.vstack((
-            np.hstack((self.A, np.zeros((self.nx, nd)))),
-            np.hstack((np.zeros((nd, self.nx)), np.eye(nd)))
-        ))
-        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
-        
-        # Observer update
-        z_hat_next = A_hat @ z_hat_k + B_hat @ u_km1 + self.L @ (y_k - y_pred_k)
-        
-        self.x_hat = z_hat_next[:self.nx]
-        self.d_hat = z_hat_next[self.nx:]
     
-    def compute_observer_gain(self):
-        C = np.array([[0, 0, 1]])
-        ny = C.shape[0]
-        nd = 1
-
-        Bd = np.array([[0], [0], [0]])
-        Cd = np.array([[1]])
-
-        # A_hat = [A  Bd;  0  I]
-        A_hat = np.vstack((
-            np.hstack((self.A, Bd)),
-            np.hstack((np.zeros((ny, self.nx)), np.eye(ny)))
-        ))
-
-        # B_hat = [B; 0]
-        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
-
-        # C_hat = [C  Cd]
-        C_hat = np.hstack((C, np.ones((ny,nd))))
-
-        # Use direct gain specification for robustness
-        # L has size (nx+nd, ny) = (4, 1)
-        L = np.array([
-            [0.05],   # x velocity correction
-            [0.05],   # x acceleration correction  
-            [0.05],   # x jerk correction
-            [0.2]     # disturbance correction
-        ])
-        return L
