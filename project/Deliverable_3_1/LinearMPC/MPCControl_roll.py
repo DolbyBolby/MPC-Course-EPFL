@@ -15,25 +15,30 @@ class MPCControl_roll(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
+        # Define variables
+        x_var = cp.Variable((self.nx, self.N + 1))
+        u_var = cp.Variable((self.nu, self.N))
+        x0_var = cp.Parameter((self.nx,))
+
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
+
         Q = 1*np.eye(self.nx)# for tuning
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
         K = -K
-
         A_cl = self.A + self.B @ K
 
         #constraints
         Hu = np.array([[ 1.],
                     [-1.]])
-       
         U = Polyhedron.from_Hrep(Hu, np.array([20.0 - self.us[0],  20.0 + self.us[0]]))
        
         # maximum inavariant set for recusive feasability
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
         O = KU
-        
         max_iter = 30
         for iter in range(max_iter): 
             Oprev = O
@@ -42,27 +47,29 @@ class MPCControl_roll(MPCControl_base):
             if O == Oprev:
                 break
 
-        #plot max invariance set
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+            # Projection sur les dimensions (0, 1)
+        O.projection(dims=(0, 1)).plot(ax=ax, color='blue')
+        ax.set_title('Maximal Invariant Set - Projection along wz and gamma')
+        ax.set_xlabel('wz [m/s]')
+        ax.set_ylabel('gamma [rad]')
+        ax.grid(True)
+        plt.suptitle('Maximal Invariant Set - roll Controller', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
 
-       # Define variables
-        x_var = cp.Variable((self.nx, self.N + 1))
-        u_var = cp.Variable((self.nu, self.N))
-        x0_var = cp.Parameter((self.nx,))
-
-        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
-        us_col = self.us.reshape(-1, 1)   # (nu,1)
+        
 
         # Costs
         cost = 0
         for i in range(self.N):
             cost += cp.quad_form((x_var[:,i]-self.xs), Q)
             cost += cp.quad_form((u_var[:,i]-self.us), R)
-
         # Terminal cost
         cost += cp.quad_form((x_var[:, -1]-self.xs), Qf)
                 
         constraints = []
-
+        # x0 constraints
         constraints.append((x_var[:, 0]) == x0_var)
         # System dynamics
         constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
@@ -70,12 +77,9 @@ class MPCControl_roll(MPCControl_base):
         constraints.append(U.A @ (u_var-us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
         constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
-        
-
-        # all contraints
 
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
-        self.x0_var = x0_var     # garde une référence pour get_u
+        self.x0_var = x0_var
         self.x_var = x_var
         self.u_var = u_var
 

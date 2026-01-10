@@ -15,13 +15,20 @@ class MPCControl_xvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
+        # Define variables
+        x_var = cp.Variable((self.nx, self.N + 1))
+        u_var = cp.Variable((self.nu, self.N))
+        x0_var = cp.Parameter((self.nx,))
+
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
+
         Q = np.diag([5.0, 200.0, 50.0])# for tuning
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
         K = -K
-
         A_cl = self.A + self.B @ K
 
         #constraints
@@ -36,11 +43,9 @@ class MPCControl_xvel(MPCControl_base):
         X = Polyhedron.from_Hrep(Hx, kx - (Hx @ self.xs))
         U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))  
        
-
         # maximum inavariant set for recusive feasability
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
         O = X.intersect(KU)
-        
         max_iter = 30
         for iter in range(max_iter):  
             Oprev = O
@@ -48,16 +53,30 @@ class MPCControl_xvel(MPCControl_base):
             O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
             if O == Oprev:
                 break
-        
-        #plot max invariance set
-       
-        # Define variables
-        x_var = cp.Variable((self.nx, self.N + 1))
-        u_var = cp.Variable((self.nu, self.N))
-        x0_var = cp.Parameter((self.nx,))
 
-        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
-        us_col = self.us.reshape(-1, 1)   # (nu,1)
+        #plot terminal set
+        fig, axes = plt.subplots(1, 3, figsize=(13, 5))
+            # Projection sur les dimensions (0, 1)
+        O.projection(dims=(0, 1)).plot(ax=axes[0], color='blue')
+        axes[0].set_title('O projected along wy and beta')
+        axes[0].set_xlabel('wy [rad/s]')
+        axes[0].set_ylabel('beta [rad]')
+        axes[0].grid(True)
+            # Projection sur les dimensions (1, 2)
+        O.projection(dims=(1, 2)).plot(ax=axes[1], color='red')
+        axes[1].set_title('O projected along beta and vx')
+        axes[1].set_xlabel('beta [rad]')
+        axes[1].set_ylabel('vx [m/s]')
+        axes[1].grid(True)
+            # Projection sur les dimensions (0, 2)
+        O.projection(dims =(0,2)).plot(ax=axes[2], color='green')
+        axes[2].set_title('O projected along wy and vx')
+        axes[2].set_xlabel('wy [rad/s]')
+        axes[2].set_ylabel('vx [m/s]')
+        axes[2].grid(True)
+        plt.suptitle('Maximal Invariant Set - xvel Controller', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
 
         # Costs
         cost = 0
