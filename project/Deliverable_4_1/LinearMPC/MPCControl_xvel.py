@@ -39,7 +39,6 @@ class MPCControl_xvel(MPCControl_base):
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve()
         assert prob.status == cp.OPTIMAL
-        #print("SS status:", self. ocp.status, "r:", target)
         xss = dxss_var.value + self.xs
         uss = duss_var.value + self.us
         
@@ -53,6 +52,7 @@ class MPCControl_xvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+        e_var = cp.Variable((1,self.N+1))
 
         x_ref = cp.Parameter((self.nx,))
         u_ref = cp.Parameter((self.nu,))
@@ -63,12 +63,7 @@ class MPCControl_xvel(MPCControl_base):
 
         Q = np.diag([1.0, 2000.0, 20.0]) # for tuning
         R = 1*np.eye(self.nu)
-
-        # Terminal weight Qf and terminal controller K
-        K,Qf,_ = dlqr(self.A,self.B,Q,R)
-        K = -K
-
-        A_cl = self.A + self.B @ K
+        S = 0.1*np.eye(1)
 
         #constraints
         Hx = np.array([[0., 1., 0.],
@@ -81,11 +76,15 @@ class MPCControl_xvel(MPCControl_base):
 
         X = Polyhedron.from_Hrep(Hx, kx)
         U = Polyhedron.from_Hrep(Hu, ku)  
-       
+
+        # Terminal weight Qf and terminal controller K
+        K,Qf,_ = dlqr(self.A,self.B,Q,R)
+        K = -K
+        A_cl = self.A + self.B @ K
+
         # maximum inavariant set for recusive feasability
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
-        O = X.intersect(KU)
-        
+        O = KU
         max_iter = 30
         for iter in range(max_iter): 
             Oprev = O
@@ -100,6 +99,7 @@ class MPCControl_xvel(MPCControl_base):
         for i in range(self.N):
             cost += cp.quad_form((x_var[:,i] - x_ref), Q)
             cost += cp.quad_form((u_var[:,i] - u_ref), R)
+            cost += cp.quad_form((e_var[:,i]),S)
         # Terminal cost
         cost += cp.quad_form((x_var[:, -1] - x_ref), Qf)
 
@@ -109,11 +109,13 @@ class MPCControl_xvel(MPCControl_base):
         # System dynamics
         constraints.append((x_var[:,1:] - x_ref_col) == self.A @ (x_var[:,:-1] - x_ref_col) + self.B @ (u_var - u_ref_col))
         # State constraints
-        constraints.append(X.A @ (x_var[:, :-1] - x_ref_col) <= X.b.reshape(-1, 1)- X.A @ x_ref_col)
+        constraints.append(X.A @ (x_var[:, :-1] - x_ref_col) <= X.b.reshape(-1, 1)- X.A @ x_ref_col + e_var[:,:-1])
         # Input constraints
         constraints.append(U.A @ (u_var - u_ref_col) <= U.b.reshape(-1, 1) - U.A @ u_ref_col)
         # Terminal Constraints
         constraints.append(O.A @ (x_var[:, -1] - x_ref_col) <= O.b.reshape(-1, 1))
+        # Slack variable constraints
+        constraints.append(e_var[:,1:] >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -122,6 +124,7 @@ class MPCControl_xvel(MPCControl_base):
         self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
+        self.e_var = e_var
 
         # YOUR CODE HERE
         #################################################

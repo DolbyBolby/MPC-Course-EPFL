@@ -15,7 +15,6 @@ class MPCControl_roll(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-
         Q = 1*np.eye(self.nx)# for tuning
         R = 1*np.eye(self.nu)
 
@@ -26,15 +25,12 @@ class MPCControl_roll(MPCControl_base):
         A_cl = self.A + self.B @ K
 
         #constraints
-
         Hu = np.array([[ 1.],
                     [-1.]])
        
         U = Polyhedron.from_Hrep(Hu, np.array([20.0 - self.us[0],  20.0 + self.us[0]]))
        
-
         # maximum inavariant set for recusive feasability
-
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
         O = KU
         
@@ -42,27 +38,19 @@ class MPCControl_roll(MPCControl_base):
         for iter in range(max_iter): 
             Oprev = O
             F,f = O.A,O.b
-            O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
-            
+            O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,))) 
             if O == Oprev:
                 break
-        
 
         #plot max invariance set
-       
-        # Create a figure
-        #fig = plt.figure()
-        #ax = fig.add_subplot(111, projection='3d')
-        #O.plot(ax=ax)
-        #plt.show()
 
        # Define variables
-        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
-        us_col = self.us.reshape(-1, 1)   # (nu,1)
-
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
 
         # Costs
         cost = 0
@@ -75,7 +63,7 @@ class MPCControl_roll(MPCControl_base):
                 
         constraints = []
 
-        constraints.append((x_var[:, 0]-xs_col) == x0_var)
+        constraints.append((x_var[:, 0]) == x0_var)
         # System dynamics
         constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
         # Input constraints

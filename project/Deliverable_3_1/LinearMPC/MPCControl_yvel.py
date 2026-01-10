@@ -15,7 +15,6 @@ class MPCControl_yvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-
         Q = 40*np.eye(self.nx)# for tuning
         R = 0.1*np.eye(self.nu)
 
@@ -35,18 +34,15 @@ class MPCControl_yvel(MPCControl_base):
         ku = np.array([0.26,0.26])
 
         X = Polyhedron.from_Hrep(Hx, kx - (Hx @ self.xs))
-        U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))  
+        U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))   
        
 
         # maximum inavariant set for recusive feasability
-
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
         O = X.intersect(KU)
         
-
-       
         max_iter = 30
-        for iter in range(max_iter): 
+        for iter in range(max_iter):  
             Oprev = O
             F,f = O.A,O.b
             O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
@@ -57,20 +53,14 @@ class MPCControl_yvel(MPCControl_base):
 
         #plot max invariance set
        
-        # Create a figure
-        #fig = plt.figure()
-        #ax = fig.add_subplot(111, projection='3d')
-        #O.plot(ax=ax)
-        #plt.show()
 
-       # Define variables
-        
-        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
-        us_col = self.us.reshape(-1, 1)   # (nu,1)
-
+        # Define variables
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+
+        xs_col = self.xs.reshape(-1, 1)   # (nx,1)
+        us_col = self.us.reshape(-1, 1)   # (nu,1)
 
         # Costs
         cost = 0
@@ -86,13 +76,13 @@ class MPCControl_yvel(MPCControl_base):
         # Initial condition
         constraints.append(x_var[:, 0] == x0_var)
         # System dynamics
-        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var-us_col))
+        constraints.append((x_var[:,1:] - xs_col) == self.A @ (x_var[:,:-1] - xs_col) + self.B @ (u_var - us_col))
         # State constraints
         constraints.append(X.A @ (x_var[:, :-1]-xs_col) <= X.b.reshape(-1, 1))
         # Input constraints
-        constraints.append(U.A @ (u_var-us_col) <= U.b.reshape(-1, 1))
+        constraints.append(U.A @ (u_var - us_col) <= U.b.reshape(-1, 1))
         # Terminal Constraints
-        constraints.append(O.A @ (x_var[:, -1]-xs_col) <= O.b.reshape(-1, 1))
+        constraints.append(O.A @ (x_var[:, -1] - xs_col) <= O.b.reshape(-1, 1))
         
 
         # all contraints

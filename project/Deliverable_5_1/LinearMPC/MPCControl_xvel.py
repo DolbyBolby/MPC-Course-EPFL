@@ -16,6 +16,19 @@ class MPCControl_xvel(MPCControl_base):
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
+        return self.compute_steady_state_with_disturbance(r, np.zeros(self.nx))
+    
+    def compute_steady_state_with_disturbance(self, r: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute steady-state with disturbance compensation.
+        At steady state: xss = A*xss + B*uss + d
+        => (I - A)*xss = B*uss + d
+        
+        We solve for absolute values xss and uss that satisfy:
+        - The steady-state equation with disturbance
+        - The output constraint C*xss = r (target velocity)
+        - Input bounds
+        """
         target = r[-1]
         C = np.array([[0, 0, 1]])
 
@@ -25,10 +38,12 @@ class MPCControl_xvel(MPCControl_base):
         u_min = -0.26
         u_max = 0.26
 
-        # Objective: minimize input squared
-        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
+        # Objective: minimize input effort
+        ss_obj = cp.quad_form(uss_var - self.us, np.eye(self.nu))
         
-        # Constraints: steady-state and input bounds
+        # Constraints: steady-state WITH disturbance
+        # (I - A)*xss = B*uss + d
+        I_minus_A = np.eye(self.nx) - self.A
         ss_cons = [
             duss_var >= u_min - self.us,
             duss_var <= u_max - self.us,
@@ -39,7 +54,6 @@ class MPCControl_xvel(MPCControl_base):
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve()
         assert prob.status == cp.OPTIMAL
-        #print("SS status:", self. ocp.status, "r:", target)
         xss = dxss_var.value + self.xs
         uss = duss_var.value + self.us
         
@@ -53,6 +67,7 @@ class MPCControl_xvel(MPCControl_base):
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
+        e_var = cp.Variable((1,self.N+1))
 
         x_ref = cp.Parameter((self.nx,))
         u_ref = cp.Parameter((self.nu,))
@@ -63,12 +78,7 @@ class MPCControl_xvel(MPCControl_base):
 
         Q = np.diag([1.0, 2000.0, 20.0]) # for tuning
         R = 1*np.eye(self.nu)
-
-        # Terminal weight Qf and terminal controller K
-        K,Qf,_ = dlqr(self.A,self.B,Q,R)
-        K = -K
-
-        A_cl = self.A + self.B @ K
+        S = 0.1*np.eye(1)
 
         #constraints
         Hx = np.array([[0., 1., 0.],
@@ -81,11 +91,15 @@ class MPCControl_xvel(MPCControl_base):
 
         X = Polyhedron.from_Hrep(Hx, kx)
         U = Polyhedron.from_Hrep(Hu, ku)  
-       
+
+        # Terminal weight Qf and terminal controller K
+        K,Qf,_ = dlqr(self.A,self.B,Q,R)
+        K = -K
+        A_cl = self.A + self.B @ K
+
         # maximum inavariant set for recusive feasability
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
-        O = X.intersect(KU)
-        
+        O = KU
         max_iter = 30
         for iter in range(max_iter): 
             Oprev = O
@@ -100,6 +114,7 @@ class MPCControl_xvel(MPCControl_base):
         for i in range(self.N):
             cost += cp.quad_form((x_var[:,i] - x_ref), Q)
             cost += cp.quad_form((u_var[:,i] - u_ref), R)
+            cost += cp.quad_form((e_var[:,i]),S)
         # Terminal cost
         cost += cp.quad_form((x_var[:, -1] - x_ref), Qf)
 
@@ -109,11 +124,13 @@ class MPCControl_xvel(MPCControl_base):
         # System dynamics
         constraints.append((x_var[:,1:] - x_ref_col) == self.A @ (x_var[:,:-1] - x_ref_col) + self.B @ (u_var - u_ref_col))
         # State constraints
-        constraints.append(X.A @ (x_var[:, :-1] - x_ref_col) <= X.b.reshape(-1, 1)- X.A @ x_ref_col)
+        constraints.append(X.A @ (x_var[:, :-1] - x_ref_col) <= X.b.reshape(-1, 1)- X.A @ x_ref_col + e_var[:,:-1])
         # Input constraints
         constraints.append(U.A @ (u_var - u_ref_col) <= U.b.reshape(-1, 1) - U.A @ u_ref_col)
         # Terminal Constraints
         constraints.append(O.A @ (x_var[:, -1] - x_ref_col) <= O.b.reshape(-1, 1))
+        # Slack variable constraints
+        constraints.append(e_var >= 0)
 
         # Store problem and variables
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
@@ -122,9 +139,7 @@ class MPCControl_xvel(MPCControl_base):
         self.u_var = u_var
         self.x_ref = x_ref
         self.u_ref = u_ref
-
-        # YOUR CODE HERE
-        #################################################
+        self.e_var = e_var
 
     def get_u(
         self, x0: np.ndarray, x_target: np.ndarray = None, u_target: np.ndarray = None
@@ -147,4 +162,63 @@ class MPCControl_xvel(MPCControl_base):
 
         return u0, x_traj, u_traj
     
+    def estimate_parameters(self, x_k: np.ndarray, x_km1: np.ndarray, u_km1: np.ndarray) -> None:
+        """
+        Update estimated state and disturbance using Luenberger observer.
+        x_k: current measurement
+        x_km1: previous measurement
+        u_km1: previous input
+        """
+        C = np.array([[0, 0, 1]])
+        Cd = np.array([[0.0]])  # disturbance not directly measured
+        
+        # Augmented state z = [x; d]
+        z_hat_k = np.concatenate([self.x_hat, self.d_hat])
+        
+        # Measurement
+        y_k = C @ x_k
+        y_pred_k = C @ self.x_hat + Cd @ self.d_hat
+        
+        # Augmented system matrices
+        nd = 1
+        A_hat = np.vstack((
+            np.hstack((self.A, np.zeros((self.nx, nd)))),
+            np.hstack((np.zeros((nd, self.nx)), np.eye(nd)))
+        ))
+        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
+        
+        # Observer update
+        z_hat_next = A_hat @ z_hat_k + B_hat @ u_km1 + self.L @ (y_k - y_pred_k)
+        
+        self.x_hat = z_hat_next[:self.nx]
+        self.d_hat = z_hat_next[self.nx:]
     
+    def compute_observer_gain(self):
+        C = np.array([[0, 0, 1]])
+        ny = C.shape[0]
+        nd = 1
+
+        Bd = np.array([[0], [0], [0]])
+        Cd = np.array([[1]])
+
+        # A_hat = [A  Bd;  0  I]
+        A_hat = np.vstack((
+            np.hstack((self.A, Bd)),
+            np.hstack((np.zeros((ny, self.nx)), np.eye(ny)))
+        ))
+
+        # B_hat = [B; 0]
+        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
+
+        # C_hat = [C  Cd]
+        C_hat = np.hstack((C, np.ones((ny,nd))))
+
+        # Use direct gain specification for robustness
+        # L has size (nx+nd, ny) = (4, 1)
+        L = np.array([
+            [0.05],   # x velocity correction
+            [0.05],   # x acceleration correction  
+            [0.05],   # x jerk correction
+            [0.2]     # disturbance correction
+        ])
+        return L
