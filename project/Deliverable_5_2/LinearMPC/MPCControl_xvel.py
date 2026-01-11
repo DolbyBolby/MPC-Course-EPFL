@@ -57,7 +57,6 @@ class MPCControl_xvel(MPCControl_base):
         prob.solve()
         
         if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Warning: X-vel steady-state infeasible. Status: {prob.status}, ||d||={np.linalg.norm(d):.3f}")
             # Fallback: try without disturbance
             ss_cons_fallback = [
                 uss_var >= u_min,
@@ -73,7 +72,6 @@ class MPCControl_xvel(MPCControl_base):
                 uss = uss_var.value
             else:
                 # Last resort: use nominal
-                print(f"Warning: X-vel fallback also failed, using nominal xs/us")
                 xss = self.xs.copy()
                 uss = self.us.copy()
         else:
@@ -81,7 +79,6 @@ class MPCControl_xvel(MPCControl_base):
                 xss = xss_var.value
                 uss = uss_var.value
             else:
-                print(f"Warning: X-vel steady-state solver returned None, using nominal")
                 xss = self.xs.copy()
                 uss = self.us.copy()
         
@@ -187,14 +184,12 @@ class MPCControl_xvel(MPCControl_base):
         
         # Fallback if solver fails
         if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Warning: MPCControl_xvel solver status = {self.ocp.status}")
             # Try with nominal steady-state (no disturbance)
             self.x_ref.value = self.xs
             self.u_ref.value = self.us
             self.ocp.solve(solver=cp.PIQP, warm_start=True)
             if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                 # Last resort: use previous solution or zero input
-                print(f"Warning: MPCControl_xvel both solvers failed - using fallback control")
                 if hasattr(self, 'u_prev') and self.u_prev is not None:
                     u0 = self.u_prev.copy()
                 else:

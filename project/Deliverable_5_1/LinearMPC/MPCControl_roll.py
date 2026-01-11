@@ -129,12 +129,10 @@ class MPCControl_roll(MPCControl_base):
         
         # Fallback if solver fails
         if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Warning: MPCControl_roll solver status = {self.ocp.status}")
             # Try again
             self.ocp.solve(solver=cp.PIQP, warm_start=False)
             if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                 # Last resort: use previous solution or zero input
-                print(f"Warning: MPCControl_roll both solvers failed - using fallback control")
                 if hasattr(self, 'u_prev') and self.u_prev is not None:
                     u0 = self.u_prev.copy()
                 else:

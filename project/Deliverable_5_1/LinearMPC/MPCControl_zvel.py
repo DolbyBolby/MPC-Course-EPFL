@@ -50,10 +50,6 @@ class MPCControl_zvel(MPCControl_base):
         # Steady-state velocity equals reference
         x_ss = np.array([v_ref])
         
-        # Warning if saturation occurs (disturbance too large)
-        if abs(u_ss - u_ss_desired) > 1e-6:
-            print(f"⚠️  Z-controller: d={d_scalar:.4f} requires u={u_ss_desired:.2f}N, "
-                  f"saturated to [{u_min}, {u_max}] → u_ss={u_ss:.2f}N")
 
         return x_ss, np.array([u_ss])
 
@@ -166,13 +162,7 @@ class MPCControl_zvel(MPCControl_base):
         du_min = u_min - u_ss[0]
         du_max = u_max - u_ss[0]
         
-        # DEBUG: Verify bounds make sense
-        if not hasattr(self, '_bounds_printed'):
-            print(f"\n🔍 First MPC call - Constraint check:")
-            print(f"   u_ss = {u_ss[0]:.2f}N")
-            print(f"   δu bounds: [{du_min:.2f}, {du_max:.2f}]")
-            print(f"   Implies u ∈ [{u_ss[0]+du_min:.2f}, {u_ss[0]+du_max:.2f}]N")
-            self._bounds_printed = True
+        
         
         self.du_lb.value = np.full((self.nu, self.N), du_min)
         self.du_ub.value = np.full((self.nu, self.N), du_max)
@@ -182,36 +172,23 @@ class MPCControl_zvel(MPCControl_base):
             self._debug_counter = 0
         self._debug_counter += 1
         
-        # DEBUG: Verify parameters are set correctly
-        if self._debug_counter % 50 == 1:
-            print(f"   x0_var = {self.x0_var.value}")
-            print(f"   x_ref = {self.x_ref.value}")
-            print(f"   du_lb[0,0] = {self.du_lb.value[0,0]:.2f}, du_ub[0,0] = {self.du_ub.value[0,0]:.2f}")
         
         # Solve MPC (disable warm_start to avoid stale solutions)
         try:
             self.ocp.solve(solver=cp.PIQP, warm_start=False, verbose=False)
         except Exception as e:
-            print(f"❌ Z-MPC solver EXCEPTION: {e}")
             self.ocp.status = "error"
         
         # ========== STEP 4: EXTRACT SOLUTION ==========
         # DEBUG: Print solver status periodically
         
         if self._debug_counter % 50 == 1:  # Print every 50 iterations
-            print(f"\n🔧 Z-MPC Debug (iter {self._debug_counter}):")
-            print(f"   INPUT: x0={x0[0]:+.4f}, target={x_target[0] if x_target is not None else 0.0:+.4f}")
-            print(f"   Solver status: {self.ocp.status}")
-            print(f"   d_hat={self.d_hat[0]:+.4f}, u_ss={u_ss[0]:+.2f}N")
-            print(f"   du_bounds=[{du_min:+.2f}, {du_max:+.2f}]")
             if self.ocp.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                 du0_debug = self.du_var.value[:, 0]
                 u0_debug = u_ss + du0_debug
-                print(f"   SOLUTION: δu[0]={du0_debug[0]:+.4f}, u[0]={u0_debug[0]:+.2f}N")
         
         if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"❌ Z-MPC solver failed: {self.ocp.status}")
-            print(f"   d_hat={self.d_hat[0]:.4f}, x_ss={x_ss[0]:.4f}, u_ss={u_ss[0]:.2f}")
+           
             # Fallback: use steady-state input
             u0 = u_ss.copy()
             x_traj = np.tile(x0.reshape(-1, 1), (1, self.N+1))
@@ -222,11 +199,6 @@ class MPCControl_zvel(MPCControl_base):
             du0 = self.du_var.value[:, 0]
             u0 = u_ss + du0
             
-            # DEBUG: Check if du_var is actually changing
-            if hasattr(self, '_last_du0'):
-                if np.abs(du0[0] - self._last_du0) < 1e-6 and self._debug_counter > 10:
-                    print(f"⚠️  WARNING: δu[0] hasn't changed for multiple iterations!")
-                    print(f"   δu[0] = {du0[0]:.4f}, u_ss = {u_ss[0]:.2f}, u[0] = {u0[0]:.2f}")
             self._last_du0 = du0[0]
             
             # x_traj = x_ss + δx_traj
@@ -283,16 +255,7 @@ class MPCControl_zvel(MPCControl_base):
         - Fast adaptation: observer responds quickly to disturbance changes
         - Robustness: not too aggressive to avoid noise amplification
         """
-        nd = 1
-        
-        # For a simple 1D system with constant disturbance:
-        # The observer gain directly determines how fast the disturbance is estimated
-        # L = [l_x; l_d] where:
-        #   - l_x: gain for state estimation (typically small)
-        #   - l_d: gain for disturbance estimation (typically moderate)
-        
-        # Classical approach: use Kalman-like gains
-        # For discrete-time offset-free MPC with constant disturbance
+        nd = 1  # Disturbance dimension
         l_x = 0.1  # State error gain (10% correction per step)
         l_d = 0.3  # Disturbance error gain (30% correction per step)
         

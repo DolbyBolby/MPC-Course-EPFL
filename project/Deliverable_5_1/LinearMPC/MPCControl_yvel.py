@@ -213,14 +213,12 @@ class MPCControl_yvel(MPCControl_base):
         
         # Fallback if solver fails
         if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"Warning: MPCControl_yvel solver status = {self.ocp.status}")
             # Try with nominal steady-state
             self.x_ref.value = self.xs
             self.u_ref.value = self.us
             self.ocp.solve(solver=cp.PIQP, warm_start=True)
             if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                 # Last resort: use previous solution or zero input
-                print(f"Warning: MPCControl_yvel both solvers failed - using fallback control")
                 if hasattr(self, 'u_prev') and self.u_prev is not None:
                     u0 = self.u_prev.copy()
                 else:
