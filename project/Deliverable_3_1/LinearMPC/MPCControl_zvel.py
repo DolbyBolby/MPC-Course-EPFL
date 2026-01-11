@@ -27,7 +27,6 @@ class MPCControl_zvel(MPCControl_base):
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)
         K = -K
-
         A_cl = self.A + self.B @ K
 
         #constraints

@@ -10,7 +10,7 @@ class MPCControl_zvel(MPCControl_base):
     x_ids: np.ndarray = np.array([8])
     u_ids: np.ndarray = np.array([2])
 
-    def compute_steady_state(self,r:np.ndarray,d_hat:np.ndarray)-> tuple[np.ndarray,np.ndarray]: 
+    def compute_steady_state(self, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
@@ -51,83 +51,74 @@ class MPCControl_zvel(MPCControl_base):
         x_ss = np.array([v_ref])
         
 
-        # Objective: minimize input squared
-        ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
-        print("self.B")
-        # Constraints: steady-state and input bounds
-        ss_cons = [
-            duss_var >= u_min - self.us,
-            duss_var <= u_max - self.us,
-            dxss_var == self.A @ dxss_var + self.B @ duss_var + self.B @ d_hat,
-            self.C @ dxss_var == target - self.C @ self.xs.reshape(-1,1) - self.Cd @ d_hat,
-        ]
-        print("b")
-        prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
-        prob.solve(solver=cp.PIQP)
-        assert prob.status == cp.OPTIMAL
-        xss = dxss_var.value + self.xs
-        uss = duss_var.value + self.us
-        print("end steady state")
-        return xss,uss
+        return x_ss, np.array([u_ss])
 
     def _setup_controller(self) -> None:
-        #################################################
-        # YOUR CODE HERE
-        # Define variables
-        x_var = cp.Variable((self.nx, self.N + 1))
-        u_var = cp.Variable((self.nu, self.N))
-        x0_var = cp.Parameter((self.nx,))
-        x_ref = cp.Parameter((self.nx,))
-        u_ref = cp.Parameter((self.nu,))
-        x_ref.value = self.xs
-        u_ref.value = self.us
-        x_ref_col = x_ref.value.reshape(-1, 1)   # (nx,1)
-        u_ref_col = u_ref.value.reshape(-1, 1)   # (nu,1)
+        Q = 1000 * np.eye(self.nx)  # State tracking weight (priorité maximale)
+        R = 0.001 * np.eye(self.nu)  # Input variation weight (quasi-nul → suit u_ss)
 
-        #x_hat = cp.Parameter(self.nx, name='x0_hat')     # (estimated) initial state x0
-        #d_hat = cp.Parameter(1, 'd_hat') 
-        
-        
-        Q = 50*np.eye(self.nx)# for tuning
-        R = 0.1*np.eye(self.nu)
+        # Input constraints: ABSOLUTE bounds 40 ≤ u ≤ 80
+        u_min = 40.0
+        u_max = 80.0
 
-        #constraints
-        Hu = np.array([[ 1.],
-                    [-1.]])
-       
-        U = Polyhedron.from_Hrep(Hu, np.array([80.0,-40.0]))
-       
-        # Costs
+        # DEVIATION VARIABLES (key for offset-free tracking)
+        dx_var = cp.Variable((self.nx, self.N + 1))  # δx = x - x_ss
+        du_var = cp.Variable((self.nu, self.N))       # δu = u - u_ss
+        
+        # Parameters
+        x0_var = cp.Parameter((self.nx,))     # Current state (absolute)
+        x_ref = cp.Parameter((self.nx,))      # Target state x_ss (absolute)
+        u_ref = cp.Parameter((self.nu,))      # Target input u_ss (absolute)
+
+        # Cost: minimize deviations from steady-state
         cost = 0
         for i in range(self.N):
-            cost += cp.quad_form((x_var[:,i]-x_ref), Q)
-            cost += cp.quad_form((u_var[:,i]-u_ref), R)
-                
+            cost += cp.quad_form(dx_var[:, i], Q)
+            cost += cp.quad_form(du_var[:, i], R)
+        # Terminal cost (augmenté pour forcer convergence)
+        cost += 50.0 * cp.quad_form(dx_var[:, self.N], Q)
+
+        # Constraints
         constraints = []
-        constraints.append((x_var[:, 0]) == x0_var - x_ref_col)
-        # System dynamics
-        constraints.append((x_var[:,1:] - x_ref_col) == self.A @ (x_var[:,:-1] - x_ref_col) + self.B @ (u_var - u_ref_col))
-        # Input constraints
-        constraints.append(U.A @ (u_var - u_ref_col) <= U.b.reshape(-1, 1) - U.A @ u_ref_col)
+        
+        # Initial condition: δx[0] = x0 - x_ss
+        constraints.append(dx_var[:, 0] == (x0_var - cp.reshape(x_ref, (self.nx,))))
+        
+        # Dynamics in DEVIATION form: δx[k+1] = A*δx[k] + B*δu[k]
+        # (This is exact for linear systems with constant disturbance)
+        constraints.append(
+            dx_var[:, 1:] == self.A @ dx_var[:, :-1] + self.B @ du_var
+        )
+        
+        # Input constraints in ABSOLUTE form: u_min ≤ u_ss + δu ≤ u_max
+        # Rewrite as: (u_min - u_ss) ≤ δu ≤ (u_max - u_ss)
+        # These bounds are updated at each solve based on current u_ss
+        self.du_lb = cp.Parameter((self.nu, self.N))  # Lower bound for δu
+        self.du_ub = cp.Parameter((self.nu, self.N))  # Upper bound for δu
+        constraints.append(du_var >= self.du_lb)
+        constraints.append(du_var <= self.du_ub)
 
         self.ocp = cp.Problem(cp.Minimize(cost), constraints)
         self.x0_var = x0_var
-        self.x_var = x_var
-        self.u_var = u_var
+        self.dx_var = dx_var
+        self.du_var = du_var
         self.x_ref = x_ref
         self.u_ref = u_ref
-        #self.x_hat = x0_var
-        #print("x_hat setup",self.x_hat.value)
-
-        # YOUR CODE HERE
-        #################################################
 
     def get_u(
         self, x0: np.ndarray, x_target: np.ndarray = None, u_target: np.ndarray = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        #################################################
-        # YOUR CODE HERE
-
+        """
+        OFFSET-FREE MPC: Compute control with disturbance estimation.
+        
+        Algorithm:
+        1. Estimate constant disturbance d from prediction error
+        2. Compute target steady-state (x_ss, u_ss) that compensates d
+        3. Solve MPC with nominal dynamics, cost relative to (x_ss, u_ss)
+        
+        Key: x0 is MEASUREMENT, observer estimates d_hat
+        """
+        # ========== STEP 1: DISTURBANCE OBSERVER ==========
         if not hasattr(self, 'd_hat'):
             # First call: initialize observer
             self.d_hat = np.zeros(1)
@@ -223,46 +214,37 @@ class MPCControl_zvel(MPCControl_base):
         self.u_prev = u0.copy()
 
         return u0, x_traj, u_traj
-    
-    def compute_estimates(self,x0:np.ndarray)-> None:
-        # Attention x_hat est un parametre ce ocp
-        print("befor")
-        tmp = (
-            self.A_hat @ np.concatenate((self.x_hat, self.d_hat)) +
-            self.L @ ( x0 - self.C @ self.x_hat + self.Cd @ self.d_hat)
-        )
-        print("after")
-        self.x_hat = tmp[:self.nx]
-        self.d_hat = tmp[self.nx:]
-        print("end")
-    
-    def compute_observer_gain(self)-> tuple[np.ndarray]:
 
-        self.C = np.array([[1]])
-        self.Cd = np.array([[1]])
-
-        # print("Cd",self.Cd)
-        # print("A",self.A)
-        # print("B",self.B)
-
-        # A_hat = [A  Bd;  0  I]
-        self.A_hat = np.vstack((
-            np.hstack((self.A, self.B)),
-            np.hstack((0, 1))
+    def estimate_parameters(self, x_k: np.ndarray, x_km1: np.ndarray, u_km1: np.ndarray) -> None:
+        """
+        Update estimated state and disturbance using Luenberger observer.
+        x_k: current measurement
+        x_km1: previous measurement
+        u_km1: previous input
+        """
+        C = np.array([[1.0]])
+        Cd = np.array([[0.0]])  # disturbance not directly measured
+        
+        # Augmented state z = [x; d]
+        z_hat_k = np.concatenate([self.x_hat, self.d_hat])
+        
+        # Measurement
+        y_k = C @ x_k
+        y_pred_k = C @ self.x_hat + Cd @ self.d_hat
+        
+        # Augmented system matrices
+        nd = 1
+        A_hat = np.vstack((
+            np.hstack((self.A, np.zeros((self.nx, nd)))),
+            np.hstack((np.zeros((nd, self.nx)), np.eye(nd)))
         ))
-        #print("A_hat",self.A_hat)
-        # B_hat = [B; 0]
-        self.B_hat = np.vstack((self.B, np.zeros((1, self.nu))))
-        #print("B_hat",self.B_hat)
-        # C_hat = [C  Cd]
-        self.C_hat = np.hstack((self.C, self.Cd))
-        #print("C_hat",self.C_hat)
-
-        poles = np.array([0.5, 0.6])
-        from scipy.signal import place_poles
-        res = place_poles(self.A_hat.T, self.C_hat.T, poles)
-        L = -res.gain_matrix.T
-        print("L",L)
+        B_hat = np.vstack((self.B, np.zeros((nd, self.nu))))
+        
+        # Observer update
+        z_hat_next = A_hat @ z_hat_k + B_hat @ u_km1 + self.L @ (y_k - y_pred_k)
+        
+        self.x_hat = z_hat_next[:self.nx]
+        self.d_hat = z_hat_next[self.nx:]
 
     def compute_observer_gain(self) -> np.ndarray:
         """
