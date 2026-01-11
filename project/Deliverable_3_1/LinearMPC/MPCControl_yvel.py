@@ -23,7 +23,7 @@ class MPCControl_yvel(MPCControl_base):
         xs_col = self.xs.reshape(-1, 1)   # (nx,1)
         us_col = self.us.reshape(-1, 1)   # (nu,1)
 
-        Q = np.diag([5.0, 200.0, 50.0])# for tuning
+        Q = np.diag([5.0, 200.0, 50.0])
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K

@@ -126,8 +126,23 @@ class MPCControl_roll(MPCControl_base):
         self.x_ref.value = xss
         self.u_ref.value = uss
         self.x0_var.value = x0
-        self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
+        self.ocp.solve(solver=cp.PIQP, warm_start=True)
+        
+        # Fallback if solver fails
+        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            # Try again
+            self.ocp.solve(solver=cp.PIQP, warm_start=False)
+            if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                # Last resort: use previous solution or zero input
+                if hasattr(self, 'u_prev') and self.u_prev is not None:
+                    u0 = self.u_prev.copy()
+                else:
+                    u0 = self.us.copy()
+                x_traj = np.tile(x0.reshape(-1, 1), (1, self.N+1))
+                u_traj = np.tile(u0.reshape(-1, 1), (1, self.N))
+                self.x_prev = x0.copy()
+                self.u_prev = u0.copy()
+                return u0, x_traj, u_traj
 
         u0 = self.u_var.value[:, 0]
         x_traj = self.x_var.value

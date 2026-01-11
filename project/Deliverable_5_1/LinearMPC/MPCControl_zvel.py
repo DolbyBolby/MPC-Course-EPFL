@@ -15,14 +15,41 @@ class MPCControl_zvel(MPCControl_base):
         Compute the steady-state state xs and input us that minimize us^2,
         subject to the system steady-state equations and input constraints.
         """
-        print("in ss")
-        target = r[-1]
-        print("a")
-        dxss_var = cp.Variable(self.nx, name='xss')
-        duss_var = cp.Variable(self.nu, name='uss')
-        print("b")
-        u_min = 40
-        u_max = 80
+        return self.compute_steady_state_with_disturbance(r, np.zeros(1))
+    
+    def compute_steady_state_with_disturbance(self, r: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        OFFSET-FREE TRACKING: Compute steady-state with disturbance compensation.
+        
+        System with disturbance: x[k+1] = A*x[k] + B*u[k] + Bd*d
+        For pure integrator (A=I, Bd=I): v[k+1] = v[k] + B*u[k] + d
+        
+        At steady state: x_ss = A*x_ss + B*u_ss + Bd*d
+        => (I - A)*x_ss = B*u_ss + Bd*d
+        
+        For integrator (A=I, Bd=I): 0 = B*u_ss + d
+        => u_ss = -d/B (compensates disturbance)
+        
+        Target: x_ss = x_ref (we want velocity = reference)
+        """
+        r = np.array(r).reshape((-1,))
+        v_ref = r[-1]  # Target velocity
+        
+        # Steady-state calculation for integrator
+        # At equilibrium: 0 = B*u_ss + d  =>  u_ss = -d/B
+        B_scalar = self.B[0, 0]  # Extract scalar from 1x1 matrix
+        d_scalar = d[0]  # Extract scalar from array
+        
+        u_ss_desired = -d_scalar / B_scalar
+        
+        # Apply ABSOLUTE input constraints [40, 80]N
+        u_min = 40.0
+        u_max = 80.0
+        u_ss = np.clip(u_ss_desired, u_min, u_max)
+        
+        # Steady-state velocity equals reference
+        x_ss = np.array([v_ref])
+        
 
         # Objective: minimize input squared
         ss_obj = cp.quad_form(duss_var, np.eye(self.nu))
@@ -102,29 +129,98 @@ class MPCControl_zvel(MPCControl_base):
         # YOUR CODE HERE
 
         if not hasattr(self, 'd_hat'):
-            print("1")
-            self.d_hat = np.zeros(self.nx)
-            self.x_hat = x0
-            self.L = self.compute_observer_gain()
-            xss,uss = self.compute_steady_state(x_target,self.d_hat)
-            print("2")
-        else :
-            print("3")
-            self.compute_estimates(x0)
-            xss,uss = self.compute_steady_state(x_target,self.d_hat)
-
-        self.x0_var.value = self.x_hat
-        print("x_hat getu",self.x_hat)
-        self.x_ref.value = xss
-        self.u_ref.value = uss
-        self.ocp.solve(solver=cp.PIQP)
-        assert self.ocp.status == cp.OPTIMAL
-
-        u0 = self.u_var.value[:, 0]
-        x_traj = self.x_var.value
-        u_traj = self.u_var.value
-        # YOUR CODE HERE
-        #################################################
+            # First call: initialize observer
+            self.d_hat = np.zeros(1)
+            self.x_prev = x0.copy()
+            self.u_prev = np.zeros(self.nu)
+        else:
+            # Predict state using NOMINAL model (no disturbance)
+            # x_pred[k] = A*x[k-1] + B*u[k-1]
+            x_pred = self.A @ self.x_prev + self.B @ self.u_prev
+            
+            # Prediction error (actual - predicted)
+            # e[k] = x_measured[k] - x_pred[k]
+            # For system with constant disturbance: e ≈ d
+            e = x0 - x_pred
+            
+            # Update disturbance estimate with integral action
+            # d_hat[k] = d_hat[k-1] + L_d * e[k]
+            gain_d = 0.3  # Observer gain (faster convergence)
+            self.d_hat = self.d_hat + gain_d * e
+            
+            # Saturate estimate (physical limits)
+            # Gravity: d_real ≈ -g*Ts = -0.49 m/s/step
+            # Allow margin just above 0.49 to prevent saturation at equilibrium
+            d_max = 0.55  # Bounds: -0.55 to +0.55 (includes -0.49 with margin)
+            self.d_hat = np.clip(self.d_hat, -d_max, d_max)
+        
+        # ========== STEP 2: TARGET CALCULATION ==========
+        # Compute steady-state that rejects disturbance
+        x_ss, u_ss = self.compute_steady_state_with_disturbance(x_target, self.d_hat)
+        
+        # ========== STEP 3: SOLVE MPC IN DEVIATION FORM ==========
+        # Update parameters
+        self.x0_var.value = x0
+        self.x_ref.value = x_ss
+        self.u_ref.value = u_ss
+        
+        # Update input constraint bounds for δu
+        # u ∈ [40, 80] with u = u_ss + δu
+        # => δu ∈ [40 - u_ss, 80 - u_ss]
+        u_min, u_max = 40.0, 80.0
+        du_min = u_min - u_ss[0]
+        du_max = u_max - u_ss[0]
+        
+        
+        
+        self.du_lb.value = np.full((self.nu, self.N), du_min)
+        self.du_ub.value = np.full((self.nu, self.N), du_max)
+        
+        # Initialize debug counter if needed
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        
+        
+        # Solve MPC (disable warm_start to avoid stale solutions)
+        try:
+            self.ocp.solve(solver=cp.PIQP, warm_start=False, verbose=False)
+        except Exception as e:
+            self.ocp.status = "error"
+        
+        # ========== STEP 4: EXTRACT SOLUTION ==========
+        # DEBUG: Print solver status periodically
+        
+        if self._debug_counter % 50 == 1:  # Print every 50 iterations
+            if self.ocp.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                du0_debug = self.du_var.value[:, 0]
+                u0_debug = u_ss + du0_debug
+        
+        if self.ocp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+           
+            # Fallback: use steady-state input
+            u0 = u_ss.copy()
+            x_traj = np.tile(x0.reshape(-1, 1), (1, self.N+1))
+            u_traj = np.tile(u0.reshape(-1, 1), (1, self.N))
+        else:
+            # Convert deviation variables back to absolute
+            # u = u_ss + δu
+            du0 = self.du_var.value[:, 0]
+            u0 = u_ss + du0
+            
+            self._last_du0 = du0[0]
+            
+            # x_traj = x_ss + δx_traj
+            dx_traj = self.dx_var.value
+            x_traj = x_ss.reshape(-1, 1) + dx_traj
+            
+            # u_traj = u_ss + δu_traj  
+            du_traj = self.du_var.value
+            u_traj = u_ss.reshape(-1, 1) + du_traj
+        
+        # Store for next iteration (observer needs history)
+        self.x_prev = x0.copy()
+        self.u_prev = u0.copy()
 
         return u0, x_traj, u_traj
     
@@ -168,4 +264,19 @@ class MPCControl_zvel(MPCControl_base):
         L = -res.gain_matrix.T
         print("L",L)
 
+    def compute_observer_gain(self) -> np.ndarray:
+        """
+        Compute observer gain for offset-free disturbance estimation.
+        Uses direct gain specification instead of pole placement for robustness.
+        
+        For constant disturbance estimation:
+        - Fast adaptation: observer responds quickly to disturbance changes
+        - Robustness: not too aggressive to avoid noise amplification
+        """
+        nd = 1  # Disturbance dimension
+        l_x = 0.1  # State error gain (10% correction per step)
+        l_d = 0.3  # Disturbance error gain (30% correction per step)
+        
+        L = np.array([[l_x], [l_d]])
+        
         return L

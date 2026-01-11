@@ -23,7 +23,7 @@ class MPCControl_roll(MPCControl_base):
         xs_col = self.xs.reshape(-1, 1)   # (nx,1)
         us_col = self.us.reshape(-1, 1)   # (nu,1)
 
-        Q = 1*np.eye(self.nx)# for tuning
+        Q = 50*np.eye(self.nx)
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
@@ -57,8 +57,6 @@ class MPCControl_roll(MPCControl_base):
         plt.suptitle('Maximal Invariant Set - roll Controller', fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
-
-        
 
         # Costs
         cost = 0

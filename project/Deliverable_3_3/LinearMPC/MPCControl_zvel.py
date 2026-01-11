@@ -75,7 +75,7 @@ class MPCControl_zvel(MPCControl_base):
             cost += cp.quad_form((u_var[:,i]-u_ref), R)
                 
         constraints = []
-        constraints.append((x_var[:, 0]) == x0_var - x_ref_col)
+        constraints.append((x_var[:, 0]) == x0_var)
         # System dynamics
         constraints.append((x_var[:,1:] - x_ref_col) == self.A @ (x_var[:,:-1] - x_ref_col) + self.B @ (u_var - u_ref_col))
         # Input constraints

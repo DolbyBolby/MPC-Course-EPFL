@@ -21,7 +21,7 @@ class MPCControl_zvel(MPCControl_base):
         xs_col = self.xs.reshape(-1, 1)   # (nx,1)
         us_col = self.us.reshape(-1, 1)   # (nu,1)
 
-        Q = 50*np.eye(self.nx)# for tuning
+        Q = 50*np.eye(self.nx)
         R = 0.1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K

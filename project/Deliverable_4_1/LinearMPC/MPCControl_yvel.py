@@ -62,7 +62,7 @@ class MPCControl_xvel(MPCControl_base):
         u_ref_col = u_ref.value.reshape(-1, 1)   # (nu,1)
 
         Q = np.diag([1.0, 2000.0, 20.0]) # for tuning
-        R = 1*np.eye(self.nu)
+        R = 2*np.eye(self.nu)
         S = 0.1*np.eye(1)
 
         #constraints

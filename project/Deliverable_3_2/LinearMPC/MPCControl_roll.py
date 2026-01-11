@@ -12,10 +12,6 @@ class MPCControl_roll(MPCControl_base):
     u_ids: np.ndarray = np.array([3])
 
     def compute_steady_state(self,r:np.ndarray)-> tuple[np.ndarray,np.ndarray]: 
-        """
-        Compute the steady-state state xs and input us that minimize us^2,
-        subject to the system steady-state equations and input constraints.
-        """
         target = r[-1]
         C = np.array([[0, 1]])
 
@@ -39,7 +35,6 @@ class MPCControl_roll(MPCControl_base):
         prob = cp.Problem(cp.Minimize(ss_obj), ss_cons)
         prob.solve()
         assert prob.status == cp.OPTIMAL
-        #print("SS status:", self. ocp.status, "r:", target)
         xss = dxss_var.value + self.xs
         uss = duss_var.value + self.us
         
@@ -61,8 +56,8 @@ class MPCControl_roll(MPCControl_base):
         x_ref_col = x_ref.value.reshape(-1, 1)   # (nx,1)
         u_ref_col = u_ref.value.reshape(-1, 1)   # (nu,1)
         
-        Q = 1*np.eye(self.nx)# for tuning
-        R = 1*np.eye(self.nu)
+        Q = np.diag([1,100])# for tuning
+        R = 0.1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
         K,Qf,_ = dlqr(self.A,self.B,Q,R)

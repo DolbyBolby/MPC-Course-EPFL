@@ -15,7 +15,7 @@ class MPCControl_xvel(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-        # Define variables
+         # Define variables
         x_var = cp.Variable((self.nx, self.N + 1))
         u_var = cp.Variable((self.nu, self.N))
         x0_var = cp.Parameter((self.nx,))
@@ -23,7 +23,7 @@ class MPCControl_xvel(MPCControl_base):
         xs_col = self.xs.reshape(-1, 1)   # (nx,1)
         us_col = self.us.reshape(-1, 1)   # (nu,1)
 
-        Q = np.diag([5.0, 200.0, 50.0])# for tuning
+        Q = np.diag([5.0, 200.0, 50.0])
         R = 1*np.eye(self.nu)
 
         # Terminal weight Qf and terminal controller K
@@ -41,7 +41,7 @@ class MPCControl_xvel(MPCControl_base):
         ku = np.array([0.26,0.26])
 
         X = Polyhedron.from_Hrep(Hx, kx - (Hx @ self.xs))
-        U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))  
+        U = Polyhedron.from_Hrep(Hu, ku - (Hu @ self.us))   
        
         # maximum inavariant set for recusive feasability
         KU = Polyhedron.from_Hrep(U.A @ K, U.b)
@@ -53,8 +53,8 @@ class MPCControl_xvel(MPCControl_base):
             O = Polyhedron.from_Hrep(np.vstack((F, F @ A_cl)), np.vstack((f, f)).reshape((-1,)))
             if O == Oprev:
                 break
-
-        #plot terminal set
+        
+       #plot terminal set
         fig, axes = plt.subplots(1, 3, figsize=(13, 5))
             # Projection sur les dimensions (0, 1)
         O.projection(dims=(0, 1)).plot(ax=axes[0], color='blue')
@@ -111,7 +111,7 @@ class MPCControl_xvel(MPCControl_base):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         #################################################
         # YOUR CODE HERE
-        
+
         self.x0_var.value = x0
         self.ocp.solve(solver=cp.PIQP)
         assert self.ocp.status == cp.OPTIMAL
