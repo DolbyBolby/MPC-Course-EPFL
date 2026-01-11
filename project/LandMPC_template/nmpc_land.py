@@ -28,53 +28,21 @@ class NmpcCtrl:
         self.nx, self.nu= xs.size, us.size
 
         
-        # linear model around landing 
-
-        #A, B = rocket.linearize(xs, us)   # continuous
-
-        #define controler 
-        # Q_lqr = np.diag([
-        #     1, 1, 1,      # angular rates ωx,ωy,ωz
-        #     5, 5, 5,      # angles α,β,γ
-        #     2, 2, 5,      # velocities vx,vy,vz (vertical more important)
-        #     20, 20, 30    # positions x,y,z (z strongest)
-        # ])
-
-        # R_lqr = np.diag([
-        #     5, 5,   # δ1, δ2
-        #     0.5,    # Pavg
-        #     0.5     # Pdiff
-        # ])
-        # Q_lqr = np.diag([
-        #     50*100,  50*100,  20*10,      # ωx,ωy,ωz  ← Attitude rates FIRST (highest)
-        #     100, 100, 50,      # α,β,γ     ← Attitude angles (next)
-        #     10*100,  10*100,  20*10,      # vx,vy,vz  ← Velocities  
-        #     20*10,  20*10,  50       # x,y,z     ← Positions LAST (z higher)
-        # ])
-
-        # R_lqr = np.diag([
-        #     0.5, 0.5,          # δ1,δ2     ← LOW (aggressive attitude control)
-        #     0.1,  0.2          # Pavg,Pdif ← LOW Pdif for roll
-        # ])
-        # self.P = 50 * self.Q   # terminal cost;
-
         Q_lqr = np.diag([
-            240*0.02, 240*0.5, 120*0.7,     # ωx,ωy,ωz  ← 4x higher → FAST attitude
+            240*0.02, 240*0.5, 120*0.7,     # ωx,ωy,ωz  
             360, 360, 180*1.2,     # α,β,γ 
             60*1.2, 60*2, 120,     # vx,vy,vz  
-            120, 120*3, 240      # x,y,z     ← positions still last
+            120, 120*3, 240      # x,y,z     
         ])
 
         R_lqr = np.diag([
-            0.08, 0.08,          # δ1,δ2 ← **10x lower** = aggressive tilting!
+            0.08, 0.08,          # δ1,δ2 
             0.04, 0.08          # Pavg,Pdif
         ])
-
-        
-                                    
+                        
         self.Q = Q_lqr
         self.R = R_lqr
-        self.P = 8 * self.Q  # **REDUCE terminal weight** = less conservative
+        self.P = 8 * self.Q  
 
         self._setup_controller()
             
@@ -92,8 +60,6 @@ class NmpcCtrl:
         opti.set_initial(self.U, np.tile(self.us.reshape(-1, 1), (1, self.N)))
 
         # parameters
-        print ('nx', self.nx)
-        print ('nu', self.nu)
         x0_par = opti.parameter(self.nx)
         xs_par = opti.parameter(self.nx)
         us_par = opti.parameter(self.nu)
@@ -171,9 +137,6 @@ class NmpcCtrl:
         opti.set_value(self.Q_par, self.Q)
         opti.set_value(self.R_par, self.R)
         opti.set_value(self.P_par, self.P)
-        print ('xo',x0)
-        print("Target xs:", self.xs[9:12])  # should be ~[1,0,3]
-        print("Target us:", self.us)        # Pavg should be lower than hover (~60%)
         sol = opti.solve()
 
         

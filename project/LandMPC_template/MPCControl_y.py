@@ -1,5 +1,6 @@
 import numpy as np
-
+from mpt4py import Polyhedron
+import cvxpy as cp
 from .MPCControl_base import MPCControl_base
 
 
@@ -10,8 +11,45 @@ class MPCControl_y(MPCControl_base):
     def _setup_controller(self) -> None:
         #################################################
         # YOUR CODE HERE
+        self.x_var = cp.Variable((self.nx, self.N + 1))      
+        self.u_var = cp.Variable((self.nu, self.N))
+        self.x0_hat = cp.Parameter((self.nx,), name='x0')      
+        self.x_ref  = cp.Parameter((self.nx,), name='xref')   
+        self.u_ref  = cp.Parameter((self.nu,), name='uref')          
+        # **Y-CONTROLLER WEIGHTS** 
+        Q = np.diag([20, 1000, 10, 30]) #* 2     # [ωx, β, vy, py]
+        R = np.array([[0.08]])                    # δ2 (u_ids=[0])
+        
+        
+        # **δ1 constraint** (u_ids=[1])
+        M = np.array([[-1.], [1.]])
+        m = np.array([np.deg2rad(15) + self.us[0], np.deg2rad(15) - self.us[0]])
+        U = Polyhedron.from_Hrep(M, m)
 
-        self.ocp = ...
+        F = np.array([[0,-1.,0,0], [0,1.,0,0]])
+        f = np.array([np.deg2rad(10) + self.xs[1], np.deg2rad(10) - self.xs[1]])
+        X = Polyhedron.from_Hrep(F, f)
+        # Slack variables
+        self.slack_var = cp.Variable((2, self.N), name="slack")
+        Slack = 1e6 * np.eye(2)
+        
+        cost = 0
+        for i in range(self.N):
+            cost += cp.quad_form(self.x_var[:,i] - self.x_ref, Q)
+            cost += cp.quad_form(self.u_var[:,i] - self.u_ref, R)
+            cost += cp.quad_form(self.slack_var[:,i], Slack)
+        
+        constraints = []
+        constraints.append(self.x_var[:,0] == self.x0_hat)
+        constraints.append(self.x_var[:,1:] == self.A @ self.x_var[:,:-1] + self.B @ self.u_var)
+        # Input: |δ2| 
+        constraints.append(U.A @ self.u_var <= U.b.reshape(-1, 1))
+        constraints.append(X.A @ self.x_var[:,:-1] <= X.b.reshape(-1,1) + self.slack_var)
+        constraints.append(self.slack_var >= 0)
+
+        
+
+        self.ocp = cp.Problem(cp.Minimize(cost), constraints)
 
         # YOUR CODE HERE
         #################################################
@@ -22,10 +60,27 @@ class MPCControl_y(MPCControl_base):
         #################################################
         # YOUR CODE HERE
 
-        u0 = ...
-        x_traj = ...
-        u_traj = ...
-
+        # Delta coordinates (error from trim point)
+        delta_x0 = x0 - self.xs
+        self.x0_hat.value = delta_x0
+        self.x_ref.value = np.zeros(self.nx)        # Track trim point xs
+        self.u_ref.value = np.zeros(self.nu)
+        # WARM-START with previous solution
+        # if hasattr(self, 'u_var_prev') and self.u_var_prev is not None:
+        #     self.u_var.value = self.u_var_prev
+        #     self.ocp.solve(solver=cp.PIQP, warm_start=True)
+        #     self.u_var_prev = self.u_var.value.copy()  # Save for next iteration
+        
+        self.ocp.solve(solver=cp.PIQP)
+    
+        if self.ocp.status != cp.OPTIMAL:
+            print(f"MPC {self.__class__.__name__} status: {self.ocp.status}")
+            return self.us, np.zeros((self.nx,self.N+1)), np.zeros((self.nu,self.N))
+        
+        u0 = self.u_var.value[:, 0] + self.us
+        x_traj = self.x_var.value + self.xs.reshape(-1, 1)
+        u_traj = self.u_var.value + self.us.reshape(-1, 1)
+    
         # YOUR CODE HERE
         #################################################
 
